@@ -1,0 +1,6 @@
+{
+  "name": "FlowPulse Agile - Gestão de Projetos & Produtividade",
+  "description": "Ferramenta estilo Jira com boards, sub-tarefas, acompanhamento de horas estimadas x realizadas, relatórios automatizados de produtividade e relatórios de membros.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
