@@ -11,16 +11,51 @@ import {
   Briefcase,
   Mail,
   Zap,
+  Camera,
+  Upload,
+  Image as ImageIcon,
+  Check,
+  X,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { Member } from '../types';
 import { formatHours, formatDate } from '../utils/agileHelpers';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
+import { api } from '../services/api';
 
 export const MemberPerformanceView: React.FC = () => {
-  const { currentBoard, boardTasks, members, setSelectedTaskModalId } = useAgile();
+  const { currentBoard, boardTasks, members, setSelectedTaskModalId, updateMember } = useAgile();
 
   const [selectedMemberId, setSelectedMemberId] = useState<string>(members[0]?.id || '');
+  const [isAvatarModalOpen, setIsAvatarModalOpen] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [bucketAvatars, setBucketAvatars] = useState<Array<{ filename: string; url: string }>>([]);
+
+  const loadBucketAvatars = async () => {
+    try {
+      const list = await api.getBucketAvatars();
+      setBucketAvatars(list);
+    } catch (err) {
+      console.error('Falha ao listar avatares do bucket:', err);
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      setIsUploading(true);
+      const res = await api.uploadAvatarToBucket(file, selectedMember.id);
+      if (res.success && res.url) {
+        updateMember(selectedMember.id, { avatar: res.url });
+        await loadBucketAvatars();
+      }
+    } catch (err) {
+      console.error('Erro no upload para o bucket:', err);
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   const selectedMember = members.find((m) => m.id === selectedMemberId) || members[0];
 
@@ -156,13 +191,31 @@ export const MemberPerformanceView: React.FC = () => {
           <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-5">
             {/* Header info */}
             <div className="flex items-center gap-3.5">
-              <img
-                src={selectedMember.avatar}
-                alt={selectedMember.name}
-                className="w-14 h-14 rounded-full object-cover border-2 border-indigo-500 shadow-xs"
-              />
+              <div className="relative group">
+                <img
+                  src={selectedMember.avatar}
+                  alt={selectedMember.name}
+                  className="w-14 h-14 rounded-full object-cover border-2 border-indigo-500 shadow-xs bg-slate-100 dark:bg-slate-800"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsAvatarModalOpen(true);
+                    loadBucketAvatars();
+                  }}
+                  title="Alterar foto (Upload para o Bucket)"
+                  className="absolute -bottom-1 -right-1 p-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-full shadow-md transition-transform group-hover:scale-110 cursor-pointer"
+                >
+                  <Camera className="w-3.5 h-3.5" />
+                </button>
+              </div>
               <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">{selectedMember.name}</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">{selectedMember.name}</h3>
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
+                    Bucket Ativo
+                  </span>
+                </div>
                 <p className="text-xs text-indigo-600 dark:text-indigo-400 font-medium">{selectedMember.role}</p>
                 <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-0.5">
                   <span className="flex items-center gap-1">
@@ -313,6 +366,115 @@ export const MemberPerformanceView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Modal de Gestão de Foto / Bucket */}
+      {isAvatarModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-indigo-50 dark:bg-indigo-950/50 rounded-lg text-indigo-600 dark:text-indigo-400">
+                  <Camera className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">
+                    Foto do Membro no Bucket
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    {selectedMember.name} • Armazenamento local no Bucket
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsAvatarModalOpen(false)}
+                className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Current Avatar Preview */}
+            <div className="flex items-center gap-4 p-3 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
+              <img
+                src={selectedMember.avatar}
+                alt={selectedMember.name}
+                className="w-16 h-16 rounded-full object-cover border-2 border-indigo-500 shadow-sm bg-slate-100 dark:bg-slate-800"
+              />
+              <div className="space-y-1 text-xs min-w-0">
+                <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Caminho no Bucket</span>
+                <p className="font-mono text-[11px] text-slate-700 dark:text-slate-300 break-all bg-white dark:bg-slate-900 px-2 py-1 rounded border border-slate-200 dark:border-slate-800">
+                  {selectedMember.avatar}
+                </p>
+              </div>
+            </div>
+
+            {/* Upload Area */}
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5">
+                Fazer upload de nova foto para o Bucket
+              </label>
+              <label className="flex flex-col items-center justify-center border-2 border-dashed border-indigo-300 dark:border-indigo-800 hover:border-indigo-500 rounded-xl p-4 bg-indigo-50/30 dark:bg-indigo-950/20 cursor-pointer transition-colors">
+                <Upload className="w-6 h-6 text-indigo-600 dark:text-indigo-400 mb-1.5" />
+                <span className="text-xs font-medium text-slate-700 dark:text-slate-300">
+                  {isUploading ? 'Enviando para o bucket...' : 'Clique para selecionar foto do computador'}
+                </span>
+                <span className="text-[10px] text-slate-400 mt-0.5">PNG, JPG, SVG ou WebP até 10MB</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  disabled={isUploading}
+                  onChange={handleFileChange}
+                />
+              </label>
+            </div>
+
+            {/* Choose from Bucket Library */}
+            {bucketAvatars.length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                  Ou selecione outro avatar do Bucket:
+                </span>
+                <div className="grid grid-cols-6 gap-2">
+                  {bucketAvatars.map((item) => (
+                    <button
+                      type="button"
+                      key={item.url}
+                      onClick={() => {
+                        updateMember(selectedMember.id, { avatar: item.url });
+                      }}
+                      className={`relative p-1 rounded-lg border transition-all cursor-pointer ${
+                        selectedMember.avatar === item.url
+                          ? 'border-indigo-600 ring-2 ring-indigo-500/30 bg-indigo-50 dark:bg-indigo-950/40'
+                          : 'border-slate-200 dark:border-slate-800 hover:border-indigo-300'
+                      }`}
+                      title={item.filename}
+                    >
+                      <img src={item.url} alt={item.filename} className="w-9 h-9 rounded-full object-cover bg-slate-100 dark:bg-slate-800" />
+                      {selectedMember.avatar === item.url && (
+                        <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-indigo-600 rounded-full flex items-center justify-center text-white">
+                          <Check className="w-2.5 h-2.5" />
+                        </span>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2">
+              <button
+                type="button"
+                onClick={() => setIsAvatarModalOpen(false)}
+                className="px-4 py-2 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white cursor-pointer shadow-xs"
+              >
+                Concluir
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

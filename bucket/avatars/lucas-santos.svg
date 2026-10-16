@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg-lucas" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4f46e5" />
+      <stop offset="100%" stop-color="#312e81" />
+    </linearGradient>
+    <linearGradient id="skin" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#f8d5b8" />
+      <stop offset="100%" stop-color="#e2ab86" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="64" fill="url(#bg-lucas)" />
+  <!-- Shoulders / Jacket -->
+  <path d="M24 128 C24 98, 44 86, 64 86 C84 86, 104 98, 104 128 Z" fill="#1e1b4b" />
+  <path d="M48 88 L64 112 L80 88 Z" fill="#ffffff" />
+  <path d="M60 94 L64 128 L68 94 Z" fill="#6366f1" />
+  <!-- Neck -->
+  <rect x="54" y="68" width="20" height="22" rx="4" fill="url(#skin)" />
+  <!-- Head -->
+  <ellipse cx="64" cy="52" rx="22" ry="26" fill="url(#skin)" />
+  <!-- Hair -->
+  <path d="M42 46 C42 28, 52 22, 64 22 C76 22, 86 28, 86 46 C86 48, 84 34, 76 30 C70 27, 58 27, 52 30 C44 34, 42 48, 42 46 Z" fill="#1c1917" />
+  <!-- Beard & Mustache -->
+  <path d="M48 58 C48 76, 56 82, 64 82 C72 82, 80 76, 80 58 C78 64, 72 70, 64 70 C56 70, 50 64, 48 58 Z" fill="#292524" />
+  <!-- Eyes & Glasses -->
+  <circle cx="53" cy="50" r="3" fill="#1c1917" />
+  <circle cx="75" cy="50" r="3" fill="#1c1917" />
+  <rect x="45" y="44" width="16" height="12" rx="3" fill="none" stroke="#6366f1" stroke-width="2.5" />
+  <rect x="67" y="44" width="16" height="12" rx="3" fill="none" stroke="#6366f1" stroke-width="2.5" />
+  <path d="M61 50 L67 50" stroke="#6366f1" stroke-width="2.5" />
+  <!-- Smile -->
+  <path d="M58 66 Q64 70 70 66" fill="none" stroke="#44403c" stroke-width="2" stroke-linecap="round" />
+</svg>

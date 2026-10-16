@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg-camila" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#b45309" />
+    </linearGradient>
+    <linearGradient id="skin-c" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#faebd7" />
+      <stop offset="100%" stop-color="#e2bf9e" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="64" fill="url(#bg-camila)" />
+  <!-- Hair bun -->
+  <circle cx="64" cy="22" r="14" fill="#3b2219" />
+  <!-- Shoulders / Blouse -->
+  <path d="M24 128 C24 98, 44 88, 64 88 C84 88, 104 98, 104 128 Z" fill="#78350f" />
+  <path d="M48 88 L64 104 L80 88 Z" fill="#fef3c7" />
+  <!-- Neck -->
+  <rect x="56" y="68" width="16" height="22" rx="4" fill="url(#skin-c)" />
+  <!-- Head -->
+  <ellipse cx="64" cy="52" rx="20" ry="24" fill="url(#skin-c)" />
+  <!-- Hair front -->
+  <path d="M42 46 C42 26, 52 24, 64 24 C76 24, 86 26, 86 46 C80 34, 72 32, 64 32 C56 32, 48 34, 42 46 Z" fill="#451a03" />
+  <!-- Stylish Round Glasses -->
+  <circle cx="53" cy="50" r="8" fill="none" stroke="#d97706" stroke-width="2" />
+  <circle cx="75" cy="50" r="8" fill="none" stroke="#d97706" stroke-width="2" />
+  <path d="M61 50 L67 50" stroke="#d97706" stroke-width="2" />
+  <!-- Eyes -->
+  <circle cx="53" cy="50" r="2.5" fill="#1c1917" />
+  <circle cx="75" cy="50" r="2.5" fill="#1c1917" />
+  <!-- Smile -->
+  <path d="M58 66 Q64 71 70 66" fill="none" stroke="#b45309" stroke-width="2.5" stroke-linecap="round" />
+</svg>

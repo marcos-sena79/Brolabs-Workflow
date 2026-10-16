@@ -9,6 +9,9 @@ import {
   AlertTriangle,
   ArrowRight,
   ArrowLeft,
+  Ban,
+  Link2,
+  CheckCircle2,
 } from 'lucide-react';
 import { Task } from '../types';
 import { useAgile } from '../context/AgileContext';
@@ -22,6 +25,7 @@ interface TaskCardProps {
 
 export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
   const {
+    tasks,
     currentBoard,
     members,
     moveTask,
@@ -43,6 +47,18 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
   const isOverrun = estimated > 0 && logged > estimated;
   const overrunHours = isOverrun ? Number((logged - estimated).toFixed(1)) : 0;
   const timePercent = estimated > 0 ? Math.min(100, Math.round((logged / estimated) * 100)) : 0;
+
+  // Dependencies & Blockers calculations
+  const dependencies = task.dependencies || [];
+  const blockers = dependencies.filter((d) => d.type === 'is_blocked_by');
+  const unresolvedBlockers = blockers
+    .map((d) => {
+      const target = tasks.find((t) => t.id === d.targetTaskId);
+      return { link: d, task: target };
+    })
+    .filter((item) => item.task && item.task.statusId !== 'col-done');
+  const isBlocked = unresolvedBlockers.length > 0;
+  const blocksOthers = dependencies.filter((d) => d.type === 'blocks');
 
   const isCurrentDone = task.statusId === 'col-done';
   const taskOverdue = isOverdue(task.dueDate, isCurrentDone);
@@ -85,7 +101,11 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
   return (
     <div
       onClick={onOpenModal}
-      className={`group relative bg-white dark:bg-slate-800 rounded-lg p-3.5 border border-slate-200 dark:border-slate-700/80 shadow-2xs hover:shadow-md hover:border-indigo-400 dark:hover:border-indigo-500 transition-all cursor-pointer ${
+      className={`group relative bg-white dark:bg-slate-800 rounded-lg p-3.5 border shadow-2xs hover:shadow-md transition-all cursor-pointer ${
+        isBlocked
+          ? 'border-rose-300 dark:border-rose-800/90 hover:border-rose-400 bg-rose-50/20 dark:bg-rose-950/15'
+          : 'border-slate-200 dark:border-slate-700/80 hover:border-indigo-400 dark:hover:border-indigo-500'
+      } ${
         isTimerActiveOnThisTask ? 'ring-2 ring-emerald-500/50 bg-emerald-50/20' : ''
       }`}
     >
@@ -151,9 +171,46 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
       )}
 
       {/* Task Title */}
-      <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 line-clamp-2 leading-relaxed mb-2.5">
+      <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 line-clamp-2 leading-relaxed mb-2">
         {task.title}
       </h4>
+
+      {/* Dependency Badges */}
+      {(isBlocked || blocksOthers.length > 0 || (blockers.length > 0 && !isBlocked)) && (
+        <div className="mb-2.5 flex flex-wrap gap-1.5 items-center">
+          {isBlocked && (
+            <div
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold bg-rose-100 dark:bg-rose-950/80 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800"
+              title={`Bloqueada por: ${unresolvedBlockers.map((b) => `${b.task?.key} (${b.task?.title})`).join(', ')}`}
+            >
+              <Ban className="w-3 h-3 text-rose-600 dark:text-rose-400 shrink-0" />
+              <span className="truncate max-w-[190px]">
+                Bloqueada por {unresolvedBlockers.map((b) => b.task?.key).join(', ')}
+              </span>
+            </div>
+          )}
+
+          {!isBlocked && blockers.length > 0 && (
+            <div
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+              title="Todas as tarefas bloqueadoras foram concluídas!"
+            >
+              <CheckCircle2 className="w-3 h-3 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <span>Blocker liberado</span>
+            </div>
+          )}
+
+          {blocksOthers.length > 0 && (
+            <div
+              className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-50 dark:bg-amber-950/50 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800"
+              title={`Esta tarefa bloqueia: ${blocksOthers.map((b) => { const target = tasks.find(t => t.id === b.targetTaskId); return target ? `${target.key} (${target.title})` : ''; }).filter(Boolean).join(', ')}`}
+            >
+              <Link2 className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+              <span>Bloqueia {blocksOthers.length} {blocksOthers.length === 1 ? 'tarefa' : 'tarefas'}</span>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Subtasks Progress */}
       {totalSubtasks > 0 && (

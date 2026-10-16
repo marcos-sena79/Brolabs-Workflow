@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg-rafael" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#06b6d4" />
+      <stop offset="100%" stop-color="#0e7490" />
+    </linearGradient>
+    <linearGradient id="skin-r" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#e0a97a" />
+      <stop offset="100%" stop-color="#b87b4f" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="64" fill="url(#bg-rafael)" />
+  <!-- Shoulders / Hoodie -->
+  <path d="M22 128 C22 96, 44 86, 64 86 C84 86, 106 96, 106 128 Z" fill="#0f172a" />
+  <path d="M52 86 C52 104, 76 104, 76 86 Z" fill="#334155" />
+  <!-- Neck -->
+  <rect x="54" y="68" width="20" height="20" rx="4" fill="url(#skin-r)" />
+  <!-- Head -->
+  <ellipse cx="64" cy="52" rx="21" ry="25" fill="url(#skin-r)" />
+  <!-- Hair: curly modern fade -->
+  <path d="M42 44 C42 22, 54 16, 64 16 C74 16, 86 22, 86 44 C84 36, 78 28, 64 28 C50 28, 44 36, 42 44 Z" fill="#18181b" />
+  <circle cx="48" cy="24" r="6" fill="#18181b" />
+  <circle cx="58" cy="20" r="7" fill="#18181b" />
+  <circle cx="70" cy="20" r="7" fill="#18181b" />
+  <circle cx="80" cy="24" r="6" fill="#18181b" />
+  <!-- Eyes -->
+  <circle cx="54" cy="50" r="3" fill="#0f172a" />
+  <circle cx="74" cy="50" r="3" fill="#0f172a" />
+  <!-- Smile -->
+  <path d="M56 66 Q64 72 72 66" fill="none" stroke="#292524" stroke-width="2.5" stroke-linecap="round" />
+  <!-- Light goatee -->
+  <ellipse cx="64" cy="74" rx="4" ry="2.5" fill="#27272a" />
+</svg>

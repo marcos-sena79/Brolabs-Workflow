@@ -8,11 +8,13 @@ export const CreateTaskModal: React.FC = () => {
   const {
     isCreateModalOpen,
     setIsCreateModalOpen,
+    tasks,
     currentBoard,
     members,
     currentUser,
     createTask,
     addSubtask,
+    addDependency,
   } = useAgile();
 
   const [title, setTitle] = useState('');
@@ -29,6 +31,7 @@ export const CreateTaskModal: React.FC = () => {
   );
   const [tagInput, setTagInput] = useState('Backend, Feature');
   const [quickSubtasksInput, setQuickSubtasksInput] = useState('');
+  const [initialBlockerTaskId, setInitialBlockerTaskId] = useState('');
 
   if (!isCreateModalOpen) return null;
 
@@ -55,6 +58,11 @@ export const CreateTaskModal: React.FC = () => {
       tags,
     });
 
+    // Add initial blocker dependency if selected
+    if (initialBlockerTaskId) {
+      addDependency(created.id, initialBlockerTaskId, 'is_blocked_by');
+    }
+
     // Add quick subtasks if entered
     if (quickSubtasksInput.trim()) {
       const subtaskLines = quickSubtasksInput
@@ -70,6 +78,7 @@ export const CreateTaskModal: React.FC = () => {
     setTitle('');
     setDescription('');
     setQuickSubtasksInput('');
+    setInitialBlockerTaskId('');
     setIsCreateModalOpen(false);
   };
 
@@ -256,6 +265,27 @@ export const CreateTaskModal: React.FC = () => {
                 className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
               />
             </div>
+          </div>
+
+          {/* Initial Blocker / Dependency Selection */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Dependência / Blocker Inicial (Opcional)
+            </label>
+            <select
+              value={initialBlockerTaskId}
+              onChange={(e) => setInitialBlockerTaskId(e.target.value)}
+              className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value="">Nenhum (Tarefa independente)</option>
+              {tasks
+                .filter((t) => t.boardId === currentBoard.id)
+                .map((t) => (
+                  <option key={t.id} value={t.id}>
+                    Bloqueada por: [{t.key}] {t.title.length > 50 ? `${t.title.substring(0, 50)}...` : t.title}
+                  </option>
+                ))}
+            </select>
           </div>
 
           {/* Quick Subtasks Batch Adder */}

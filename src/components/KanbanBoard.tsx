@@ -10,6 +10,7 @@ import {
   ArrowUpDown,
   Search,
   UserCheck,
+  Ban,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { TaskCard } from './TaskCard';
@@ -17,6 +18,7 @@ import { Task } from '../types';
 
 export const KanbanBoard: React.FC = () => {
   const {
+    tasks,
     currentBoard,
     filteredBoardTasks,
     boardTasks,
@@ -41,13 +43,23 @@ export const KanbanBoard: React.FC = () => {
   // Swimlane grouping
   const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'epic' | 'priority'>('none');
 
+  // Count of blocked tasks in current board
+  const blockedTasksCount = boardTasks.filter((t) => {
+    const blockers = (t.dependencies || []).filter((d) => d.type === 'is_blocked_by');
+    return blockers.some((b) => {
+      const blockerTask = tasks.find((x) => x.id === b.targetTaskId);
+      return blockerTask && blockerTask.statusId !== 'col-done';
+    });
+  }).length;
+
   const hasActiveFilters =
     filters.searchQuery ||
     filters.selectedAssigneeId !== 'all' ||
     filters.selectedPriority !== 'all' ||
     filters.selectedIssueType !== 'all' ||
     filters.selectedEpicId !== 'all' ||
-    filters.onlyMyTasks;
+    filters.onlyMyTasks ||
+    filters.onlyBlockedTasks;
 
   const handleClearFilters = () => {
     setFilters({
@@ -57,6 +69,7 @@ export const KanbanBoard: React.FC = () => {
       selectedIssueType: 'all',
       selectedEpicId: 'all',
       onlyMyTasks: false,
+      onlyBlockedTasks: false,
     });
   };
 
@@ -152,6 +165,27 @@ export const KanbanBoard: React.FC = () => {
             >
               <UserCheck className="w-3.5 h-3.5" />
               Minhas Tarefas
+            </button>
+
+            {/* "Somente bloqueadas" */}
+            <button
+              onClick={() =>
+                setFilters((prev) => ({
+                  ...prev,
+                  onlyBlockedTasks: !prev.onlyBlockedTasks,
+                }))
+              }
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition-colors ${
+                filters.onlyBlockedTasks
+                  ? 'bg-rose-600 text-white shadow-2xs'
+                  : blockedTasksCount > 0
+                  ? 'bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 border border-rose-200 dark:border-rose-900/60'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 hover:bg-slate-200 opacity-80'
+              }`}
+              title="Filtrar tarefas que possuem impedimentos ou tarefas bloqueadoras pendentes"
+            >
+              <Ban className="w-3.5 h-3.5" />
+              <span>Bloqueadas ({blockedTasksCount})</span>
             </button>
 
             {members.map((m) => {

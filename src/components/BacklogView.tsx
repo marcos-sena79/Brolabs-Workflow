@@ -8,6 +8,8 @@ import {
   ChevronDown,
   ChevronRight,
   Calendar,
+  Ban,
+  Link2,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { formatHours, formatDate } from '../utils/agileHelpers';
@@ -15,6 +17,7 @@ import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 
 export const BacklogView: React.FC = () => {
   const {
+    tasks,
     currentBoard,
     boardTasks,
     members,
@@ -120,16 +123,37 @@ export const BacklogView: React.FC = () => {
             {sprintTasks.map((task) => {
               const assignee = members.find((m) => m.id === task.assigneeId);
               const col = currentBoard.columns.find((c) => c.id === task.statusId);
+              const blockers = (task.dependencies || []).filter((d) => d.type === 'is_blocked_by');
+              const isBlocked = blockers.some((b) => {
+                const target = tasks.find((t) => t.id === b.targetTaskId);
+                return target && target.statusId !== 'col-done';
+              });
+              const blocksCount = (task.dependencies || []).filter((d) => d.type === 'blocks').length;
+
               return (
                 <div
                   key={task.id}
                   onClick={() => setSelectedTaskModalId(task.id)}
                   className="p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex items-center justify-between gap-4 cursor-pointer transition-colors text-xs"
                 >
-                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                  <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <IssueTypeIcon type={task.issueType} className="w-4 h-4 shrink-0" />
                     <span className="font-mono font-bold text-slate-500 text-[11px] shrink-0">{task.key}</span>
                     <span className="font-semibold text-slate-900 dark:text-slate-100 truncate">{task.title}</span>
+
+                    {isBlocked && (
+                      <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/70 border border-rose-200 dark:border-rose-900 px-1.5 py-0.2 rounded shrink-0">
+                        <Ban className="w-3 h-3" />
+                        Bloqueada
+                      </span>
+                    )}
+
+                    {blocksCount > 0 && (
+                      <span className="flex items-center gap-1 text-[10px] font-medium text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/70 border border-amber-200 dark:border-amber-900 px-1.5 py-0.2 rounded shrink-0">
+                        <Link2 className="w-3 h-3" />
+                        Bloqueia ({blocksCount})
+                      </span>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-3 shrink-0">

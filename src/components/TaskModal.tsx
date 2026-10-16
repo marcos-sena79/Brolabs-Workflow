@@ -22,9 +22,14 @@ import {
   ChevronUp,
   ChevronDown,
   Layers,
+  Link2,
+  Ban,
+  ShieldAlert,
+  CheckCircle2,
+  ExternalLink,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { IssueType, Priority, Task } from '../types';
+import { IssueType, Priority, Task, DependencyType } from '../types';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 import {
   formatHours,
@@ -49,6 +54,8 @@ export const TaskModal: React.FC = () => {
     toggleSubtask,
     deleteSubtask,
     reorderSubtasks,
+    addDependency,
+    removeDependency,
     addWorklog,
     addComment,
     sendTestWebhook,
@@ -80,6 +87,11 @@ export const TaskModal: React.FC = () => {
   const [copiedKey, setCopiedKey] = useState(false);
   const [notificationSent, setNotificationSent] = useState(false);
 
+  // Task Dependency form state
+  const [isAddingDep, setIsAddingDep] = useState(false);
+  const [newDepType, setNewDepType] = useState<DependencyType>('is_blocked_by');
+  const [newDepTargetId, setNewDepTargetId] = useState('');
+
   if (!task) return null;
 
   const currentColumn = currentBoard.columns.find((c) => c.id === task.statusId);
@@ -95,6 +107,41 @@ export const TaskModal: React.FC = () => {
   const logged = task.loggedHours || 0;
   const isOverrun = estimated > 0 && logged > estimated;
   const overrunHours = isOverrun ? Number((logged - estimated).toFixed(1)) : 0;
+
+  // Dependencies calculations
+  const taskDependencies = task.dependencies || [];
+  const blockerLinks = taskDependencies.filter((d) => d.type === 'is_blocked_by');
+  const blockedByTasks = blockerLinks.map((d) => {
+    const target = tasks.find((t) => t.id === d.targetTaskId);
+    const targetCol = currentBoard.columns.find((c) => c.id === target?.statusId);
+    const targetAssignee = members.find((m) => m.id === target?.assigneeId);
+    const isResolved = target?.statusId === 'col-done';
+    return { link: d, task: target, column: targetCol, assignee: targetAssignee, isResolved };
+  });
+  const activeBlockersCount = blockedByTasks.filter((b) => !b.isResolved).length;
+
+  const blockingOthersLinks = taskDependencies.filter((d) => d.type === 'blocks');
+  const blockingTasks = blockingOthersLinks.map((d) => {
+    const target = tasks.find((t) => t.id === d.targetTaskId);
+    const targetCol = currentBoard.columns.find((c) => c.id === target?.statusId);
+    const targetAssignee = members.find((m) => m.id === target?.assigneeId);
+    const isResolved = task.statusId === 'col-done';
+    return { link: d, task: target, column: targetCol, assignee: targetAssignee, isResolved };
+  });
+
+  // Available tasks to link (exclude current task and already linked tasks)
+  const currentLinkedIds = new Set(taskDependencies.map((d) => d.targetTaskId));
+  const availableTasksForLinking = tasks.filter(
+    (t) => t.id !== task.id && !currentLinkedIds.has(t.id)
+  );
+
+  const handleAddDependencySubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newDepTargetId) return;
+    addDependency(task.id, newDepTargetId, newDepType);
+    setNewDepTargetId('');
+    setIsAddingDep(false);
+  };
 
   const handleCopyKey = () => {
     navigator.clipboard.writeText(task.key);
@@ -534,6 +581,303 @@ export const TaskModal: React.FC = () => {
                   Adicionar
                 </button>
               </form>
+            </div>
+
+            {/* DEPENDÊNCIAS E BLOQUEIOS */}
+            <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Link2 className="w-4 h-4 text-indigo-600" />
+                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                    Dependências e Bloqueios ({taskDependencies.length})
+                  </span>
+                  {activeBlockersCount > 0 && (
+                    <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-300">
+                      {activeBlockersCount} {activeBlockersCount === 1 ? 'bloqueio ativo' : 'bloqueios ativos'}
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingDep(!isAddingDep)}
+                  className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  {isAddingDep ? 'Fechar' : 'Vincular Dependência'}
+                </button>
+              </div>
+
+              {/* Active blocker warning banner */}
+              {activeBlockersCount > 0 && (
+                <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 flex items-start gap-2 text-xs text-rose-800 dark:text-rose-200">
+                  <ShieldAlert className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-bold">Esta tarefa possui impedimento ativo:</span>
+                    <p className="text-[11px] text-rose-700 dark:text-rose-300 mt-0.5">
+                      {activeBlockersCount === 1
+                        ? 'Existe 1 tarefa bloqueadora pendente. Conclua ou desbloqueie a dependência antes de avançar esta entrega.'
+                        : `Existem ${activeBlockersCount} tarefas bloqueadoras pendentes. Conclua as dependências antes de avançar esta entrega.`}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Add Dependency Form */}
+              {isAddingDep && (
+                <form
+                  onSubmit={handleAddDependencySubmit}
+                  className="p-3 bg-slate-50 dark:bg-slate-900/60 rounded-lg border border-slate-200 dark:border-slate-800 space-y-2.5"
+                >
+                  <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-800 dark:text-slate-200">
+                    <Link2 className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Adicionar Vínculo de Dependência</span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
+                    <div className="sm:col-span-5">
+                      <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-300 mb-1">
+                        Tipo de Relação
+                      </label>
+                      <select
+                        value={newDepType}
+                        onChange={(e) => setNewDepType(e.target.value as DependencyType)}
+                        className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      >
+                        <option value="is_blocked_by">Esta tarefa é bloqueada por...</option>
+                        <option value="blocks">Esta tarefa bloqueia...</option>
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-7">
+                      <label className="block text-[11px] font-medium text-slate-600 dark:text-slate-300 mb-1">
+                        Tarefa Alvo no Quadro
+                      </label>
+                      <select
+                        value={newDepTargetId}
+                        onChange={(e) => setNewDepTargetId(e.target.value)}
+                        required
+                        className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      >
+                        <option value="">Selecione uma tarefa...</option>
+                        {availableTasksForLinking.map((t) => {
+                          const col = currentBoard.columns.find((c) => c.id === t.statusId);
+                          return (
+                            <option key={t.id} value={t.id}>
+                              [{t.key}] {t.title.length > 40 ? `${t.title.substring(0, 40)}...` : t.title} ({col?.title || t.statusId})
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 italic">
+                      💡 Vínculo bidirecional: a relação recíproca é atualizada automaticamente em ambas as tarefas.
+                    </p>
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => setIsAddingDep(false)}
+                        className="px-2.5 py-1 text-xs text-slate-500 hover:text-slate-700"
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        type="submit"
+                        disabled={!newDepTargetId}
+                        className="px-3 py-1 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded shadow-xs flex items-center gap-1"
+                      >
+                        <Link2 className="w-3.5 h-3.5" />
+                        Vincular
+                      </button>
+                    </div>
+                  </div>
+                </form>
+              )}
+
+              {/* Group 1: Bloqueada por */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  <Ban className="w-3 h-3 text-rose-500" />
+                  <span>É bloqueada por ({blockedByTasks.length})</span>
+                </div>
+
+                {blockedByTasks.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {blockedByTasks.map(({ link, task: target, column: targetCol, assignee: targetAssignee, isResolved }) => {
+                      if (!target) return null;
+                      return (
+                        <div
+                          key={link.id}
+                          className={`p-2.5 rounded-lg border flex items-center justify-between gap-3 text-xs transition-colors ${
+                            isResolved
+                              ? 'bg-emerald-50/20 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60'
+                              : 'bg-rose-50/30 dark:bg-rose-950/20 border-rose-200 dark:border-rose-900/60'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            {/* Key button (clickable to navigate) */}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTaskModalId(target.id)}
+                              className="font-mono text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-0.5 shrink-0"
+                              title={`Abrir detalhes de ${target.key}`}
+                            >
+                              <span>{target.key}</span>
+                              <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                            </button>
+
+                            {/* Status badge */}
+                            {targetCol && (
+                              <span
+                                className="text-[10px] font-semibold px-1.5 py-0.2 rounded shrink-0 border"
+                                style={{
+                                  borderColor: `${targetCol.accentColor}50`,
+                                  backgroundColor: `${targetCol.accentColor}15`,
+                                  color: targetCol.accentColor,
+                                }}
+                              >
+                                {targetCol.title}
+                              </span>
+                            )}
+
+                            {/* Title */}
+                            <span className="truncate text-slate-800 dark:text-slate-200" title={target.title}>
+                              {target.title}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            {/* Resolution badge */}
+                            {isResolved ? (
+                              <span className="flex items-center gap-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-950/80 px-2 py-0.5 rounded-full">
+                                <CheckCircle2 className="w-3 h-3" />
+                                Liberada
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-700 dark:text-rose-300 bg-rose-100 dark:bg-rose-950/80 px-2 py-0.5 rounded-full">
+                                <Ban className="w-3 h-3" />
+                                Bloqueando
+                              </span>
+                            )}
+
+                            {/* Assignee */}
+                            {targetAssignee && (
+                              <img
+                                src={targetAssignee.avatar}
+                                alt={targetAssignee.name}
+                                title={`Responsável: ${targetAssignee.name}`}
+                                className="w-5 h-5 rounded-full object-cover"
+                              />
+                            )}
+
+                            {/* Remove dependency button */}
+                            <button
+                              type="button"
+                              onClick={() => removeDependency(task.id, target.id)}
+                              title="Remover vínculo de dependência"
+                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 italic py-1">
+                    Nenhum impedimento cadastrado. Esta tarefa não depende de outros itens para ser executada.
+                  </p>
+                )}
+              </div>
+
+              {/* Group 2: Bloqueia */}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  <Link2 className="w-3 h-3 text-amber-500" />
+                  <span>Bloqueia ({blockingTasks.length})</span>
+                </div>
+
+                {blockingTasks.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {blockingTasks.map(({ link, task: target, column: targetCol, assignee: targetAssignee, isResolved }) => {
+                      if (!target) return null;
+                      return (
+                        <div
+                          key={link.id}
+                          className="p-2.5 rounded-lg border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800 flex items-center justify-between gap-3 text-xs"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            {/* Key button (clickable to navigate) */}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTaskModalId(target.id)}
+                              className="font-mono text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-0.5 shrink-0"
+                              title={`Abrir detalhes de ${target.key}`}
+                            >
+                              <span>{target.key}</span>
+                              <ExternalLink className="w-2.5 h-2.5 opacity-60" />
+                            </button>
+
+                            {/* Status badge */}
+                            {targetCol && (
+                              <span
+                                className="text-[10px] font-semibold px-1.5 py-0.2 rounded shrink-0 border"
+                                style={{
+                                  borderColor: `${targetCol.accentColor}50`,
+                                  backgroundColor: `${targetCol.accentColor}15`,
+                                  color: targetCol.accentColor,
+                                }}
+                              >
+                                {targetCol.title}
+                              </span>
+                            )}
+
+                            {/* Title */}
+                            <span className="truncate text-slate-800 dark:text-slate-200" title={target.title}>
+                              {target.title}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-2 shrink-0">
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                              {task.statusId === 'col-done'
+                                ? 'Liberada para prosseguir'
+                                : 'Aguardando entrega desta tarefa'}
+                            </span>
+
+                            {/* Assignee */}
+                            {targetAssignee && (
+                              <img
+                                src={targetAssignee.avatar}
+                                alt={targetAssignee.name}
+                                title={`Responsável: ${targetAssignee.name}`}
+                                className="w-5 h-5 rounded-full object-cover"
+                              />
+                            )}
+
+                            {/* Remove dependency button */}
+                            <button
+                              type="button"
+                              onClick={() => removeDependency(task.id, target.id)}
+                              title="Remover vínculo de dependência"
+                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 italic py-1">
+                    Esta tarefa não está bloqueando outras entregas no momento.
+                  </p>
+                )}
+              </div>
             </div>
 
             {/* APONTAMENTOS DE HORAS (WORKLOGS) */}

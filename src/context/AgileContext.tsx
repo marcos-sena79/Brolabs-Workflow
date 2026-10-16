@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode, useCallback } from 'react';
 import confetti from 'canvas-confetti';
 import {
   Board,
@@ -15,18 +15,8 @@ import {
   EmailNotification,
   EmailSettings,
   DependencyType,
-  TaskDependencyLink,
 } from '../types';
-import {
-  INITIAL_BOARDS,
-  INITIAL_MEMBERS,
-  INITIAL_TASKS,
-  INITIAL_INTEGRATIONS,
-  INITIAL_ACTIVITY_LOGS,
-  INITIAL_WEBHOOK_LOGS,
-  INITIAL_EMAIL_SETTINGS,
-  INITIAL_EMAIL_NOTIFICATIONS,
-} from '../data/initialData';
+import { api } from '../services/api';
 
 interface ActiveTimer {
   taskId: string;
@@ -64,6 +54,11 @@ interface AgileContextType {
   isCreateModalOpen: boolean;
   isShortcutsModalOpen: boolean;
   isCommandPaletteOpen: boolean;
+
+  // Database Connection Status
+  isLoading: boolean;
+  dbConnected: boolean;
+  refetchDbData: () => Promise<void>;
 
   // Setters & Nav
   setCurrentBoardId: (id: string) => void;
@@ -153,104 +148,50 @@ interface AgileContextType {
   resetToDemoData: () => void;
 }
 
-const STORAGE_KEYS = {
-  BOARDS: 'brolabs_boards_v1',
-  TASKS: 'brolabs_tasks_v1',
-  MEMBERS: 'brolabs_members_v1',
-  INTEGRATIONS: 'brolabs_integrations_v1',
-  ACTIVITIES: 'brolabs_activities_v1',
-  WEBHOOKS: 'brolabs_webhooks_v1',
-  CURRENT_BOARD: 'brolabs_current_board_v1',
-  CURRENT_USER: 'brolabs_current_user_v1',
-  EMAIL_NOTIFICATIONS: 'brolabs_email_notifications_v1',
-  EMAIL_SETTINGS: 'brolabs_email_settings_v1',
+const DEFAULT_BOARD: Board = {
+  id: 'board-default',
+  key: 'ENG',
+  name: 'Sprint 24 - Plataforma & Core',
+  description: 'Desenvolvimento do núcleo de microsserviços e segurança.',
+  sprintName: 'Sprint 24',
+  sprintGoal: 'Finalizar módulo de autenticação e banco de dados Neon',
+  sprintStartDate: new Date().toISOString().split('T')[0],
+  sprintEndDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
+  columns: [
+    { id: 'col-backlog', title: 'Backlog', order: 0, wipLimit: 15, accentColor: '#64748b' },
+    { id: 'col-todo', title: 'A Fazer', order: 1, wipLimit: 8, accentColor: '#3b82f6' },
+    { id: 'col-inprogress', title: 'Em Andamento', order: 2, wipLimit: 5, accentColor: '#eab308' },
+    { id: 'col-review', title: 'Code Review / QA', order: 3, wipLimit: 4, accentColor: '#8b5cf6' },
+    { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981' },
+  ],
+  epics: [],
+};
+
+const DEFAULT_MEMBER: Member = {
+  id: 'mem-default',
+  name: 'Lucas Santos',
+  email: 'lucas.santos@techcorp.com.br',
+  avatar: '/bucket/avatars/lucas-santos.svg',
+  role: 'Tech Lead & Arquiteto',
+  department: 'Engenharia',
+  weeklyCapacityHours: 40,
+  active: true,
 };
 
 const AgileContext = createContext<AgileContextType | undefined>(undefined);
 
 export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
-  // Load from localStorage or initial
-  const [boards, setBoards] = useState<Board[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.BOARDS);
-      return saved ? JSON.parse(saved) : INITIAL_BOARDS;
-    } catch {
-      return INITIAL_BOARDS;
-    }
-  });
+  const [isLoading, setIsLoading] = useState(true);
+  const [dbConnected, setDbConnected] = useState(true);
 
-  const [currentBoardId, setCurrentBoardId] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_BOARD);
-      return saved || INITIAL_BOARDS[0].id;
-    } catch {
-      return INITIAL_BOARDS[0].id;
-    }
-  });
-
-  const [tasks, setTasks] = useState<Task[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.TASKS);
-      if (saved) {
-        const parsed: Task[] = JSON.parse(saved);
-        return parsed.map((t) => {
-          const initMatch = INITIAL_TASKS.find((it) => it.id === t.id);
-          return {
-            ...t,
-            dependencies: t.dependencies || initMatch?.dependencies || [],
-          };
-        });
-      }
-      return INITIAL_TASKS;
-    } catch {
-      return INITIAL_TASKS;
-    }
-  });
-
-  const [members, setMembers] = useState<Member[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.MEMBERS);
-      return saved ? JSON.parse(saved) : INITIAL_MEMBERS;
-    } catch {
-      return INITIAL_MEMBERS;
-    }
-  });
-
-  const [currentUserId, setCurrentUserId] = useState<string>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
-      return saved || INITIAL_MEMBERS[0].id;
-    } catch {
-      return INITIAL_MEMBERS[0].id;
-    }
-  });
-
-  const [integrations, setIntegrations] = useState<IntegrationConfig[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.INTEGRATIONS);
-      return saved ? JSON.parse(saved) : INITIAL_INTEGRATIONS;
-    } catch {
-      return INITIAL_INTEGRATIONS;
-    }
-  });
-
-  const [activityLogs, setActivityLogs] = useState<ActivityItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ACTIVITIES);
-      return saved ? JSON.parse(saved) : INITIAL_ACTIVITY_LOGS;
-    } catch {
-      return INITIAL_ACTIVITY_LOGS;
-    }
-  });
-
-  const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.WEBHOOKS);
-      return saved ? JSON.parse(saved) : INITIAL_WEBHOOK_LOGS;
-    } catch {
-      return INITIAL_WEBHOOK_LOGS;
-    }
-  });
+  const [boards, setBoards] = useState<Board[]>([DEFAULT_BOARD]);
+  const [currentBoardId, setCurrentBoardIdState] = useState<string>(DEFAULT_BOARD.id);
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [members, setMembers] = useState<Member[]>([DEFAULT_MEMBER]);
+  const [currentUserId, setCurrentUserIdState] = useState<string>(DEFAULT_MEMBER.id);
+  const [integrations, setIntegrations] = useState<IntegrationConfig[]>([]);
+  const [activityLogs, setActivityLogs] = useState<ActivityItem[]>([]);
+  const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
 
   const [currentView, setCurrentView] = useState<ViewTab>('kanban');
   const [selectedTaskModalId, setSelectedTaskModalId] = useState<string | null>(null);
@@ -265,72 +206,79 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     selectedIssueType: 'all',
     selectedEpicId: 'all',
     onlyMyTasks: false,
+    onlyBlockedTasks: false,
   });
 
   const [activeTimer, setActiveTimer] = useState<ActiveTimer | null>(null);
 
   // Email Notification States
-  const [emailNotifications, setEmailNotifications] = useState<EmailNotification[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.EMAIL_NOTIFICATIONS);
-      return saved ? JSON.parse(saved) : INITIAL_EMAIL_NOTIFICATIONS;
-    } catch {
-      return INITIAL_EMAIL_NOTIFICATIONS;
-    }
-  });
-
-  const [emailSettings, setEmailSettings] = useState<EmailSettings>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEYS.EMAIL_SETTINGS);
-      return saved ? JSON.parse(saved) : INITIAL_EMAIL_SETTINGS;
-    } catch {
-      return INITIAL_EMAIL_SETTINGS;
-    }
+  const [emailNotifications, setEmailNotifications] = useState<EmailNotification[]>([]);
+  const [emailSettings, setEmailSettings] = useState<EmailSettings>({
+    enabled: true,
+    senderEmail: 'flowpulse-agile@techcorp.com.br',
+    senderName: 'FlowPulse Notification Hub',
+    notifyOnStatusChange: true,
+    notifyOnMentions: true,
+    notifyReporterOnDone: true,
   });
 
   const [isEmailDrawerOpen, setIsEmailDrawerOpen] = useState(false);
   const [lastEmailAlertToast, setLastEmailAlertToast] = useState<EmailNotification | null>(null);
 
-  // Sync state to local storage
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.BOARDS, JSON.stringify(boards));
-  }, [boards]);
+  // Fetch all initial data from NeonDB backend
+  const fetchDbData = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const data = await api.getInitialState();
+      if (data.boards && data.boards.length > 0) {
+        setBoards(data.boards);
+      }
+      if (data.members && data.members.length > 0) {
+        setMembers(data.members);
+      }
+      setTasks(data.tasks || []);
+      setActivityLogs(data.activityLogs || []);
+      setIntegrations(data.integrations || []);
+      setWebhookLogs(data.webhookLogs || []);
+      if (data.emailSettings) {
+        setEmailSettings(data.emailSettings);
+      }
+      setEmailNotifications(data.emailNotifications || []);
+
+      if (data.currentBoardId) {
+        setCurrentBoardIdState(data.currentBoardId);
+      } else if (data.boards && data.boards[0]) {
+        setCurrentBoardIdState(data.boards[0].id);
+      }
+
+      if (data.currentUserId) {
+        setCurrentUserIdState(data.currentUserId);
+      } else if (data.members && data.members[0]) {
+        setCurrentUserIdState(data.members[0].id);
+      }
+
+      setDbConnected(true);
+    } catch (err) {
+      console.error('Falha ao conectar com o backend NeonDB:', err);
+      setDbConnected(false);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CURRENT_BOARD, currentBoardId);
-  }, [currentBoardId]);
+    fetchDbData();
+  }, [fetchDbData]);
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.TASKS, JSON.stringify(tasks));
-  }, [tasks]);
+  const setCurrentBoardId = (id: string) => {
+    setCurrentBoardIdState(id);
+    api.setAppSetting('current_board_id', id).catch(console.error);
+  };
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.MEMBERS, JSON.stringify(members));
-  }, [members]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.CURRENT_USER, currentUserId);
-  }, [currentUserId]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.INTEGRATIONS, JSON.stringify(integrations));
-  }, [integrations]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.ACTIVITIES, JSON.stringify(activityLogs));
-  }, [activityLogs]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.WEBHOOKS, JSON.stringify(webhookLogs));
-  }, [webhookLogs]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.EMAIL_NOTIFICATIONS, JSON.stringify(emailNotifications));
-  }, [emailNotifications]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.EMAIL_SETTINGS, JSON.stringify(emailSettings));
-  }, [emailSettings]);
+  const setCurrentUserId = (id: string) => {
+    setCurrentUserIdState(id);
+    api.setAppSetting('current_user_id', id).catch(console.error);
+  };
 
   // Active Timer Tick effect
   useEffect(() => {
@@ -351,14 +299,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     let pendingGTimeout: NodeJS.Timeout | null = null;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 1. Command Palette: Cmd+K (Mac) or Ctrl+K (Windows/Linux)
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setIsCommandPaletteOpen((prev) => !prev);
         return;
       }
 
-      // Check if user is typing inside an editable form element
       const target = e.target as HTMLElement | null;
       const isInput =
         target &&
@@ -374,7 +320,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
 
-      // 2. Escape to close open modals
       if (e.key === 'Escape') {
         if (isEmailDrawerOpen) {
           setIsEmailDrawerOpen(false);
@@ -398,14 +343,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
 
-      // If any modal is currently open, don't trigger background action shortcuts
       if (isCreateModalOpen || selectedTaskModalId || isShortcutsModalOpen || isCommandPaletteOpen || isEmailDrawerOpen) {
         return;
       }
 
       const key = e.key.toLowerCase();
 
-      // 3. Two-key "G then <Key>" Navigation Sequences (Jira Standard)
       if (pendingGKey) {
         pendingGKey = false;
         if (pendingGTimeout) clearTimeout(pendingGTimeout);
@@ -450,7 +393,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
 
-      // 4. Number keys 1-7 for direct View switching
       if (e.key === '1') {
         e.preventDefault();
         setCurrentView('kanban');
@@ -487,29 +429,24 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
 
-      // 5. Common Actions:
-      // 'c' -> Create Task (Classic Jira standard)
       if (key === 'c' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         setIsCreateModalOpen(true);
         return;
       }
 
-      // 'e' -> Open Email Notifications Drawer
       if (key === 'e' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         setIsEmailDrawerOpen((prev) => !prev);
         return;
       }
 
-      // '?' -> Open Shortcuts Cheat Sheet
       if (e.key === '?' || (e.key === '/' && e.shiftKey)) {
         e.preventDefault();
         setIsShortcutsModalOpen(true);
         return;
       }
 
-      // '/' -> Focus Search Input
       if (e.key === '/' && !e.shiftKey) {
         e.preventDefault();
         const searchInput = document.querySelector('input[placeholder*="Pesquisar"]') as HTMLInputElement | null;
@@ -520,21 +457,18 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
 
-      // 'm' -> Toggle "Minhas Tarefas" filter
       if (key === 'm' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         setFilters((prev) => ({ ...prev, onlyMyTasks: !prev.onlyMyTasks }));
         return;
       }
 
-      // 't' -> Toggle live timer
       if (key === 't' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
         if (activeTimer) {
           if (activeTimer.isRunning) pauseTimer();
           else resumeTimer();
         } else {
-          // Find first available task
           const taskCandidate = tasks.find((t) => t.boardId === currentBoardId && t.statusId !== 'col-done');
           if (taskCandidate) {
             startTimer(taskCandidate.id);
@@ -561,11 +495,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   // Derived current board and user
   const currentBoard = useMemo(() => {
-    return boards.find((b) => b.id === currentBoardId) || boards[0] || INITIAL_BOARDS[0];
+    return boards.find((b) => b.id === currentBoardId) || boards[0] || DEFAULT_BOARD;
   }, [boards, currentBoardId]);
 
   const currentUser = useMemo(() => {
-    return members.find((m) => m.id === currentUserId) || members[0] || INITIAL_MEMBERS[0];
+    return members.find((m) => m.id === currentUserId) || members[0] || DEFAULT_MEMBER;
   }, [members, currentUserId]);
 
   // Tasks for current board
@@ -576,42 +510,35 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   // Filtered tasks for current board
   const filteredBoardTasks = useMemo(() => {
     return boardTasks.filter((task) => {
-      // Search query
       if (filters.searchQuery.trim()) {
         const query = filters.searchQuery.toLowerCase();
         const matchesKey = task.key.toLowerCase().includes(query);
         const matchesTitle = task.title.toLowerCase().includes(query);
-        const matchesDesc = task.description.toLowerCase().includes(query);
+        const matchesDesc = (task.description || '').toLowerCase().includes(query);
         const matchesTags = task.tags?.some((t) => t.toLowerCase().includes(query));
         if (!matchesKey && !matchesTitle && !matchesDesc && !matchesTags) return false;
       }
 
-      // Assignee
       if (filters.selectedAssigneeId !== 'all' && task.assigneeId !== filters.selectedAssigneeId) {
         return false;
       }
 
-      // Only my tasks
       if (filters.onlyMyTasks && task.assigneeId !== currentUser.id) {
         return false;
       }
 
-      // Priority
       if (filters.selectedPriority !== 'all' && task.priority !== filters.selectedPriority) {
         return false;
       }
 
-      // Issue Type
       if (filters.selectedIssueType !== 'all' && task.issueType !== filters.selectedIssueType) {
         return false;
       }
 
-      // Epic
       if (filters.selectedEpicId !== 'all' && task.epicId !== filters.selectedEpicId) {
         return false;
       }
 
-      // Only blocked tasks (tasks with active unresolved blockers)
       if (filters.onlyBlockedTasks) {
         const hasActiveBlocker = (task.dependencies || []).some((dep) => {
           if (dep.type !== 'is_blocked_by') return false;
@@ -625,17 +552,18 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     });
   }, [boardTasks, filters, currentUser.id, tasks]);
 
-  // Helper to add activity log
+  // Helper to add activity log and persist to NeonDB
   const logActivity = (item: Omit<ActivityItem, 'id' | 'timestamp'>) => {
     const newLog: ActivityItem = {
       ...item,
       id: `act-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date().toISOString(),
     };
-    setActivityLogs((prev) => [newLog, ...prev.slice(0, 49)]); // keep 50
+    setActivityLogs((prev) => [newLog, ...prev.slice(0, 49)]);
+    api.createActivity(newLog).catch(console.error);
   };
 
-  // Trigger Email Notification Alert
+  // Trigger Email Notification Alert and persist to NeonDB
   const triggerEmailAlert = (alertData: {
     triggerType: 'status_change' | 'mention';
     taskId: string;
@@ -658,6 +586,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     setEmailNotifications((prev) => [newEmail, ...prev.slice(0, 49)]);
     setLastEmailAlertToast(newEmail);
+    api.createEmailNotification(newEmail).catch(console.error);
 
     setTimeout(() => {
       setLastEmailAlertToast((curr) => (curr?.id === newEmail.id ? null : curr));
@@ -675,21 +604,28 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const updateEmailSettings = (settings: Partial<EmailSettings>) => {
-    setEmailSettings((prev) => ({ ...prev, ...settings }));
+    setEmailSettings((prev) => {
+      const next = { ...prev, ...settings };
+      api.updateEmailSettings(next).catch(console.error);
+      return next;
+    });
   };
 
   const markEmailAsRead = (id: string) => {
     setEmailNotifications((prev) =>
       prev.map((e) => (e.id === id ? { ...e, read: true } : e))
     );
+    api.markEmailAsRead(id).catch(console.error);
   };
 
   const markAllEmailsAsRead = () => {
     setEmailNotifications((prev) => prev.map((e) => ({ ...e, read: true })));
+    api.markAllEmailsAsRead().catch(console.error);
   };
 
   const clearEmailHistory = () => {
     setEmailNotifications([]);
+    api.clearEmailHistory().catch(console.error);
   };
 
   const clearEmailAlertToast = () => {
@@ -723,8 +659,8 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       };
 
       setWebhookLogs((prev) => [logItem, ...prev.slice(0, 49)]);
+      api.createWebhookLog(logItem).catch(console.error);
 
-      // Try sending actual webhook if URL is valid HTTP
       if (integration.webhookUrl && integration.webhookUrl.startsWith('http')) {
         try {
           fetch(integration.webhookUrl, {
@@ -738,17 +674,15 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               timestamp: new Date().toISOString(),
             }),
             mode: 'no-cors',
-          }).catch(() => {
-            // Silently handle CORS in browser preview
-          });
+          }).catch(() => {});
         } catch {
-          // ignore network err
+          // ignore network error
         }
       }
     });
   };
 
-  // Create Task
+  // Create Task and persist to NeonDB
   const createTask = (taskData: {
     title: string;
     description: string;
@@ -762,7 +696,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     dueDate: string;
     tags?: string[];
   }): Task => {
-    // Generate key e.g. ENG-111
     const prefix = currentBoard.key || 'TASK';
     const existingNumbers = tasks
       .filter((t) => t.key.startsWith(`${prefix}-`))
@@ -797,6 +730,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
 
     setTasks((prev) => [newTask, ...prev]);
+    api.createTask(newTask).catch(console.error);
 
     logActivity({
       type: 'task_created',
@@ -811,16 +745,18 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return newTask;
   };
 
-  // Update Task
+  // Update Task and persist to NeonDB
   const updateTask = (taskId: string, updates: Partial<Task>) => {
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === taskId) {
-          return {
+          const updated = {
             ...t,
             ...updates,
             updatedAt: new Date().toISOString(),
           };
+          api.updateTask(taskId, updates).catch(console.error);
+          return updated;
         }
         return t;
       })
@@ -834,7 +770,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     const sourceCol = currentBoard.columns.find((c) => c.id === task.statusId);
     const targetCol = currentBoard.columns.find((c) => c.id === targetStatusId);
-
     const isMovedToDone = targetStatusId === 'col-done' || targetCol?.title.toLowerCase().includes('concluíd');
 
     updateTask(taskId, { statusId: targetStatusId });
@@ -849,7 +784,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       details: `Moveu de "${sourceCol?.title || 'Anterior'}" para "${targetCol?.title || 'Novo'}"`,
     });
 
-    // Email Notification Alert for Status Change
     if (emailSettings.enabled && emailSettings.notifyOnStatusChange) {
       const sourceTitle = sourceCol?.title || 'Backlog';
       const targetTitle = targetCol?.title || targetStatusId;
@@ -887,22 +821,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
               <div style="font-size: 15px; font-weight: 600; color: #0f172a;">
                 <span style="color: #64748b; text-decoration: line-through;">${sourceTitle}</span> ➔ <span style="color: #10b981; font-weight: 700;">${targetTitle}</span>
               </div>
-              <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #475569; line-height: 1.6;">
-                <p style="margin: 2px 0;"><strong>Quadro:</strong> ${currentBoard.name} (${currentBoard.sprintName})</p>
-                <p style="margin: 2px 0;"><strong>Prioridade:</strong> ${task.priority.toUpperCase()}</p>
-                <p style="margin: 2px 0;"><strong>Horas:</strong> ${task.loggedHours}h apontadas / ${task.estimatedHours}h estimadas</p>
-              </div>
             </div>
-
-            <p style="font-size: 12px; color: #94a3b8; margin-top: 24px; border-top: 1px solid #f1f5f9; padding-top: 12px;">
-              Notificação automática gerada pelo sistema de alertas do Brolabs Workflow.
-            </p>
           </div>
         `,
       });
     }
 
-    // If marked as done, celebrate and dispatch integration!
     if (isMovedToDone) {
       try {
         confetti({
@@ -929,7 +853,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // Delete Task
+  // Delete Task and persist to NeonDB
   const deleteTask = (taskId: string) => {
     setTasks((prev) =>
       prev
@@ -939,11 +863,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           dependencies: (t.dependencies || []).filter((d) => d.targetTaskId !== taskId),
         }))
     );
+    api.deleteTask(taskId).catch(console.error);
     if (selectedTaskModalId === taskId) setSelectedTaskModalId(null);
     if (activeTimer?.taskId === taskId) setActiveTimer(null);
   };
 
-  // Subtask management
+  // Subtask management with NeonDB persistence
   const addSubtask = (taskId: string, title: string, estimatedHours = 1, assigneeId?: string) => {
     const newSub: SubTask = {
       id: `sub-${Date.now()}`,
@@ -958,9 +883,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === taskId) {
+          const updatedSubtasks = [...t.subtasks, newSub];
+          api.updateTask(taskId, { subtasks: updatedSubtasks }).catch(console.error);
           return {
             ...t,
-            subtasks: [...t.subtasks, newSub],
+            subtasks: updatedSubtasks,
             updatedAt: new Date().toISOString(),
           };
         }
@@ -992,6 +919,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             }
             return s;
           });
+          api.updateTask(taskId, { subtasks: updatedSubtasks }).catch(console.error);
           return {
             ...t,
             subtasks: updatedSubtasks,
@@ -1021,9 +949,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === taskId) {
+          const updatedSubtasks = t.subtasks.filter((s) => s.id !== subtaskId);
+          api.updateTask(taskId, { subtasks: updatedSubtasks }).catch(console.error);
           return {
             ...t,
-            subtasks: t.subtasks.filter((s) => s.id !== subtaskId),
+            subtasks: updatedSubtasks,
             updatedAt: new Date().toISOString(),
           };
         }
@@ -1055,6 +985,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           targetTaskTitle = t.title;
           targetTaskKey = t.key;
           list.splice(destinationIndex, 0, movedItem);
+          api.updateTask(taskId, { subtasks: list }).catch(console.error);
           return {
             ...t,
             subtasks: list,
@@ -1078,7 +1009,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // Task Dependencies & Blockers management
+  // Task Dependencies & Blockers management with NeonDB persistence
   const addDependency = (sourceTaskId: string, targetTaskId: string, type: DependencyType) => {
     if (sourceTaskId === targetTaskId) return;
 
@@ -1092,43 +1023,40 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const reciprocalType: DependencyType = type === 'blocks' ? 'is_blocked_by' : 'blocks';
     const now = new Date().toISOString();
 
+    const newSrcDeps = [
+      ...(sourceTask.dependencies || []).filter((d) => d.targetTaskId !== targetTaskId),
+      {
+        id: `dep-${Date.now()}-src`,
+        targetTaskId,
+        type,
+        createdAt: now,
+      },
+    ];
+
+    const newTgtDeps = [
+      ...(targetTask.dependencies || []).filter((d) => d.targetTaskId !== sourceTaskId),
+      {
+        id: `dep-${Date.now()}-tgt`,
+        targetTaskId: sourceTaskId,
+        type: reciprocalType,
+        createdAt: now,
+      },
+    ];
+
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === sourceTaskId) {
-          const filtered = (t.dependencies || []).filter((d) => d.targetTaskId !== targetTaskId);
-          return {
-            ...t,
-            dependencies: [
-              ...filtered,
-              {
-                id: `dep-${Date.now()}-src`,
-                targetTaskId,
-                type,
-                createdAt: now,
-              },
-            ],
-            updatedAt: now,
-          };
+          return { ...t, dependencies: newSrcDeps, updatedAt: now };
         }
         if (t.id === targetTaskId) {
-          const filtered = (t.dependencies || []).filter((d) => d.targetTaskId !== sourceTaskId);
-          return {
-            ...t,
-            dependencies: [
-              ...filtered,
-              {
-                id: `dep-${Date.now()}-tgt`,
-                targetTaskId: sourceTaskId,
-                type: reciprocalType,
-                createdAt: now,
-              },
-            ],
-            updatedAt: now,
-          };
+          return { ...t, dependencies: newTgtDeps, updatedAt: now };
         }
         return t;
       })
     );
+
+    api.updateTask(sourceTaskId, { dependencies: newSrcDeps }).catch(console.error);
+    api.updateTask(targetTaskId, { dependencies: newTgtDeps }).catch(console.error);
 
     const relDescription =
       type === 'blocks'
@@ -1173,25 +1101,23 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const taskB = tasks.find((t) => t.id === targetTaskId);
     const now = new Date().toISOString();
 
+    const newADeps = (taskA?.dependencies || []).filter((d) => d.targetTaskId !== targetTaskId);
+    const newBDeps = (taskB?.dependencies || []).filter((d) => d.targetTaskId !== taskId);
+
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === taskId) {
-          return {
-            ...t,
-            dependencies: (t.dependencies || []).filter((d) => d.targetTaskId !== targetTaskId),
-            updatedAt: now,
-          };
+          return { ...t, dependencies: newADeps, updatedAt: now };
         }
         if (t.id === targetTaskId) {
-          return {
-            ...t,
-            dependencies: (t.dependencies || []).filter((d) => d.targetTaskId !== taskId),
-            updatedAt: now,
-          };
+          return { ...t, dependencies: newBDeps, updatedAt: now };
         }
         return t;
       })
     );
+
+    api.updateTask(taskId, { dependencies: newADeps }).catch(console.error);
+    api.updateTask(targetTaskId, { dependencies: newBDeps }).catch(console.error);
 
     if (taskA && taskB) {
       logActivity({
@@ -1206,7 +1132,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // Add worklog (Estimadas x Realizadas)
+  // Add worklog (Estimadas x Realizadas) and persist to NeonDB
   const addWorklog = (taskId: string, hours: number, date: string, comment: string) => {
     const newLog: WorkLog = {
       id: `wl-${Date.now()}`,
@@ -1222,10 +1148,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       prev.map((t) => {
         if (t.id === taskId) {
           const newLogged = Number((t.loggedHours + hours).toFixed(1));
+          const updatedWorklogs = [newLog, ...t.worklogs];
+          api.updateTask(taskId, { loggedHours: newLogged, worklogs: updatedWorklogs }).catch(console.error);
           return {
             ...t,
             loggedHours: newLogged,
-            worklogs: [newLog, ...t.worklogs],
+            worklogs: updatedWorklogs,
             updatedAt: new Date().toISOString(),
           };
         }
@@ -1261,7 +1189,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // Add Comment
+  // Add Comment and persist to NeonDB
   const addComment = (taskId: string, text: string) => {
     if (!text.trim()) return;
     const newComment: TaskComment = {
@@ -1275,9 +1203,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === taskId) {
+          const updatedComments = [...t.comments, newComment];
+          api.updateTask(taskId, { comments: updatedComments }).catch(console.error);
           return {
             ...t,
-            comments: [...t.comments, newComment],
+            comments: updatedComments,
             updatedAt: new Date().toISOString(),
           };
         }
@@ -1297,7 +1227,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         details: `Comentou: "${text.substring(0, 40)}${text.length > 40 ? '...' : ''}"`,
       });
 
-      // Email Notification Alert for @mentions in Comments
       if (emailSettings.enabled && emailSettings.notifyOnMentions) {
         const mentionMatches = text.match(/@([a-zA-Z0-9_\u00C0-\u00FF.-]+)/g) || [];
         const recipientsToNotify = new Map<string, Member>();
@@ -1328,7 +1257,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           }
         });
 
-        // Fallback: if user typed an @ mention that didn't match anyone specifically, notify the task assignee
         if (mentionMatches.length > 0 && recipientsToNotify.size === 0) {
           const assignee = members.find((m) => m.id === task.assigneeId);
           if (assignee && assignee.id !== currentUser.id) {
@@ -1364,16 +1292,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                 
                 <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #6366f1; border-radius: 6px; padding: 16px; margin: 20px 0;">
                   <p style="margin: 0; font-size: 14px; color: #1e293b; font-style: italic; white-space: pre-wrap;">"${text}"</p>
-                  <div style="margin-top: 14px; padding-top: 12px; border-top: 1px solid #e2e8f0; font-size: 12px; color: #475569; line-height: 1.6;">
-                    <p style="margin: 2px 0;"><strong>Quadro:</strong> ${currentBoard.name}</p>
-                    <p style="margin: 2px 0;"><strong>Prioridade:</strong> ${task.priority.toUpperCase()}</p>
-                    <p style="margin: 2px 0;"><strong>Status:</strong> ${currentBoard.columns.find((c) => c.id === task.statusId)?.title || task.statusId}</p>
-                  </div>
                 </div>
-
-                <p style="font-size: 12px; color: #94a3b8; margin-top: 24px; border-top: 1px solid #f1f5f9; padding-top: 12px;">
-                  Você recebeu este alerta por ter sido citado nominalmente no Brolabs Workflow.
-                </p>
               </div>
             `,
           });
@@ -1382,7 +1301,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
-  // Board operations
+  // Board operations and persistence to NeonDB
   const createBoard = (boardData: { name: string; key: string; description: string; sprintName: string }) => {
     const newBoard: Board = {
       id: `board-${Date.now()}`,
@@ -1405,44 +1324,62 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     setBoards((prev) => [...prev, newBoard]);
     setCurrentBoardId(newBoard.id);
+    api.createBoard(newBoard).catch(console.error);
   };
 
   const updateBoard = (boardId: string, updates: Partial<Board>) => {
-    setBoards((prev) => prev.map((b) => (b.id === boardId ? { ...b, ...updates } : b)));
+    setBoards((prev) =>
+      prev.map((b) => {
+        if (b.id === boardId) {
+          const updated = { ...b, ...updates };
+          api.updateBoard(boardId, updates).catch(console.error);
+          return updated;
+        }
+        return b;
+      })
+    );
   };
 
-  // Members
+  // Members and persistence to NeonDB
   const addMember = (memberData: Omit<Member, 'id'>) => {
     const newMember: Member = {
       ...memberData,
       id: `mem-${Date.now()}`,
     };
     setMembers((prev) => [...prev, newMember]);
+    api.createMember(newMember).catch(console.error);
   };
 
   const updateMember = (memberId: string, updates: Partial<Member>) => {
-    setMembers((prev) => prev.map((m) => (m.id === memberId ? { ...m, ...updates } : m)));
+    setMembers((prev) =>
+      prev.map((m) => {
+        if (m.id === memberId) {
+          const updated = { ...m, ...updates };
+          api.updateMember(memberId, updates).catch(console.error);
+          return updated;
+        }
+        return m;
+      })
+    );
   };
 
-  // Integrations
+  // Integrations and persistence to NeonDB
   const updateIntegrationConfig = (platform: IntegrationPlatform, updates: Partial<IntegrationConfig>) => {
     setIntegrations((prev) =>
-      prev.map((item) => (item.id === platform ? { ...item, ...updates } : item))
+      prev.map((item) => {
+        if (item.id === platform) {
+          const updated = { ...item, ...updates };
+          api.updateIntegration(platform, updates).catch(console.error);
+          return updated;
+        }
+        return item;
+      })
     );
   };
 
   const sendTestWebhook = async (platform: IntegrationPlatform): Promise<boolean> => {
     const target = integrations.find((i) => i.id === platform);
     if (!target) return false;
-
-    const testPayload = {
-      event: 'test_notification',
-      platform,
-      sender: currentUser.name,
-      board: currentBoard.name,
-      message: `🔔 Teste de integração Brolabs Workflow conectado ao canal ${target.channelName}!`,
-      timestamp: new Date().toISOString(),
-    };
 
     const newLog: WebhookLog = {
       id: `wh-${Date.now()}`,
@@ -1454,6 +1391,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
 
     setWebhookLogs((prev) => [newLog, ...prev]);
+    api.createWebhookLog(newLog).catch(console.error);
 
     updateIntegrationConfig(platform, {
       lastTestedAt: new Date().toISOString(),
@@ -1507,27 +1445,19 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setActiveTimer(null);
   };
 
-  // Reset to demo
-  const resetToDemoData = () => {
-    localStorage.removeItem(STORAGE_KEYS.BOARDS);
-    localStorage.removeItem(STORAGE_KEYS.TASKS);
-    localStorage.removeItem(STORAGE_KEYS.MEMBERS);
-    localStorage.removeItem(STORAGE_KEYS.INTEGRATIONS);
-    localStorage.removeItem(STORAGE_KEYS.ACTIVITIES);
-    localStorage.removeItem(STORAGE_KEYS.WEBHOOKS);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_BOARD);
-    localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
-
-    setBoards(INITIAL_BOARDS);
-    setCurrentBoardId(INITIAL_BOARDS[0].id);
-    setTasks(INITIAL_TASKS);
-    setMembers(INITIAL_MEMBERS);
-    setCurrentUserId(INITIAL_MEMBERS[0].id);
-    setIntegrations(INITIAL_INTEGRATIONS);
-    setActivityLogs(INITIAL_ACTIVITY_LOGS);
-    setWebhookLogs(INITIAL_WEBHOOK_LOGS);
-    setActiveTimer(null);
-    setSelectedTaskModalId(null);
+  // Reset / Seed directly in NeonDB database
+  const resetToDemoData = async () => {
+    try {
+      setIsLoading(true);
+      await api.resetDatabase();
+      await fetchDbData();
+      setActiveTimer(null);
+      setSelectedTaskModalId(null);
+    } catch (err) {
+      console.error('Falha ao resetar banco de dados:', err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
@@ -1551,6 +1481,9 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         isCreateModalOpen,
         isShortcutsModalOpen,
         isCommandPaletteOpen,
+        isLoading,
+        dbConnected,
+        refetchDbData: fetchDbData,
         setCurrentBoardId,
         setCurrentView,
         setCurrentUserId,

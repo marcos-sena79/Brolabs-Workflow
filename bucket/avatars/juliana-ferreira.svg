@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <defs>
+    <linearGradient id="bg-juliana" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ec4899" />
+      <stop offset="100%" stop-color="#831843" />
+    </linearGradient>
+    <linearGradient id="skin-j" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#fae8d8" />
+      <stop offset="100%" stop-color="#e8be9e" />
+    </linearGradient>
+  </defs>
+  <rect width="128" height="128" rx="64" fill="url(#bg-juliana)" />
+  <!-- Long Hair Back -->
+  <path d="M36 44 C32 75, 34 110, 40 128 L88 128 C94 110, 96 75, 92 44 Z" fill="#2d1b18" />
+  <!-- Shoulders -->
+  <path d="M26 128 C26 100, 46 88, 64 88 C82 88, 102 100, 102 128 Z" fill="#be185d" />
+  <circle cx="64" cy="98" r="8" fill="url(#skin-j)" />
+  <!-- Neck -->
+  <rect x="56" y="70" width="16" height="22" rx="4" fill="url(#skin-j)" />
+  <!-- Head -->
+  <ellipse cx="64" cy="54" rx="20" ry="24" fill="url(#skin-j)" />
+  <!-- Hair Front -->
+  <path d="M40 46 C40 26, 52 18, 64 18 C76 18, 88 26, 88 46 C80 34, 70 30, 64 30 C56 30, 46 36, 40 46 Z" fill="#3f2723" />
+  <path d="M38 46 C42 66, 46 80, 48 90 C45 80, 42 65, 40 46 Z" fill="#3f2723" />
+  <path d="M90 46 C86 66, 82 80, 80 90 C83 80, 86 65, 88 46 Z" fill="#3f2723" />
+  <!-- Eyes -->
+  <ellipse cx="54" cy="52" rx="2.5" ry="3.5" fill="#1c1917" />
+  <ellipse cx="74" cy="52" rx="2.5" ry="3.5" fill="#1c1917" />
+  <!-- Eyebrows -->
+  <path d="M50 46 Q54 44 58 46" stroke="#2d1b18" stroke-width="1.8" fill="none" stroke-linecap="round" />
+  <path d="M70 46 Q74 44 78 46" stroke="#2d1b18" stroke-width="1.8" fill="none" stroke-linecap="round" />
+  <!-- Lips -->
+  <path d="M58 68 Q64 72 70 68" fill="none" stroke="#db2777" stroke-width="2.5" stroke-linecap="round" />
+  <!-- Earrings -->
+  <circle cx="42" cy="58" r="2.5" fill="#fde047" />
+  <circle cx="86" cy="58" r="2.5" fill="#fde047" />
+</svg>

@@ -15,6 +15,9 @@ import {
   Keyboard,
   Command,
   Mail,
+  Database,
+  RefreshCw,
+  Check,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { formatHours, formatRelativeTime } from '../utils/agileHelpers';
@@ -44,12 +47,19 @@ export const Navbar: React.FC = () => {
     setSelectedTaskModalId,
     emailNotifications,
     setIsEmailDrawerOpen,
+    dbConnected,
+    isLoading,
+    refetchDbData,
+    resetToDemoData,
   } = useAgile();
 
   const [isBoardDropdownOpen, setIsBoardDropdownOpen] = useState(false);
   const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
   const [isActivityOpen, setIsActivityOpen] = useState(false);
   const [isNewBoardModalOpen, setIsNewBoardModalOpen] = useState(false);
+  const [isDbModalOpen, setIsDbModalOpen] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncSuccess, setSyncSuccess] = useState(false);
 
   // New Board Form State
   const [newBoardName, setNewBoardName] = useState('');
@@ -238,6 +248,25 @@ export const Navbar: React.FC = () => {
             </div>
           </div>
         )}
+
+        {/* NeonDB Database Live Status Badge */}
+        <button
+          onClick={() => setIsDbModalOpen(true)}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium border transition-all cursor-pointer ${
+            dbConnected
+              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/40'
+              : 'bg-rose-50 text-rose-700 border-rose-200 dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800 hover:bg-rose-100'
+          }`}
+          title="Status do banco de dados Neon PostgreSQL"
+        >
+          <Database className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+          <span className="font-semibold hidden sm:inline">NeonDB</span>
+          <span
+            className={`w-2 h-2 rounded-full ${
+              isLoading ? 'bg-amber-500 animate-ping' : dbConnected ? 'bg-emerald-500' : 'bg-rose-500'
+            }`}
+          />
+        </button>
 
         {/* Keyboard Shortcuts Trigger */}
         <button
@@ -468,6 +497,106 @@ export const Navbar: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* NeonDB Database Info & Sync Modal */}
+      {isDbModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl max-w-md w-full p-5 space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <div className="p-2 bg-emerald-50 dark:bg-emerald-950/50 rounded-lg text-emerald-600 dark:text-emerald-400">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100">Banco de Dados Neon PostgreSQL</h3>
+                  <p className="text-[11px] text-slate-400">AWS sa-east-1 (São Paulo) • Pooler</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsDbModalOpen(false)}
+                className="p-1 rounded-md text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2.5 text-xs">
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
+                <span className="text-slate-500 dark:text-slate-400">Status da Conexão</span>
+                <span className="flex items-center gap-1.5 font-semibold text-emerald-600 dark:text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  Conectado e Operacional
+                </span>
+              </div>
+
+              <div className="flex items-center justify-between p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60">
+                <span className="text-slate-500 dark:text-slate-400">Host do Cluster</span>
+                <span className="font-mono text-[11px] text-slate-700 dark:text-slate-300 truncate max-w-[210px]">
+                  ep-little-sun-b6r9taiu-pooler...
+                </span>
+              </div>
+
+              <div className="grid grid-cols-3 gap-2 pt-1 text-center">
+                <div className="p-2 rounded-lg bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40">
+                  <span className="block text-base font-bold text-indigo-600 dark:text-indigo-400">{tasks.length}</span>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">Tarefas no DB</span>
+                </div>
+                <div className="p-2 rounded-lg bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40">
+                  <span className="block text-base font-bold text-indigo-600 dark:text-indigo-400">{boards.length}</span>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">Quadros</span>
+                </div>
+                <div className="p-2 rounded-lg bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40">
+                  <span className="block text-base font-bold text-indigo-600 dark:text-indigo-400">{members.length}</span>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">Membros</span>
+                </div>
+              </div>
+            </div>
+
+            <div className="pt-2 flex flex-col gap-2">
+              <button
+                disabled={isSyncing}
+                onClick={async () => {
+                  setIsSyncing(true);
+                  try {
+                    await refetchDbData();
+                    setSyncSuccess(true);
+                    setTimeout(() => setSyncSuccess(false), 2000);
+                  } catch (e) {
+                    console.error(e);
+                  } finally {
+                    setIsSyncing(false);
+                  }
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2 px-3 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {syncSuccess ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-white" />
+                    <span>Sincronizado com NeonDB!</span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
+                    <span>{isSyncing ? 'Sincronizando...' : 'Recarregar dados do NeonDB'}</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  if (confirm('Deseja resetar e re-semear os dados base no banco Neon PostgreSQL?')) {
+                    await resetToDemoData();
+                    setIsDbModalOpen(false);
+                  }
+                }}
+                className="w-full py-1.5 px-3 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
+              >
+                Restaurar dados base de exemplo no NeonDB
+              </button>
+            </div>
           </div>
         </div>
       )}
