@@ -123,7 +123,7 @@ export const KanbanBoard: React.FC = () => {
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-slate-100/70 dark:bg-slate-950 overflow-hidden">
       {/* Top Filter Bar */}
-      <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-6 py-3 space-y-2.5">
+      <div className="bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-3 sm:px-6 py-2 sm:py-3 space-y-2.5 max-h-[38vh] md:max-h-none overflow-y-auto md:overflow-visible shrink-0">
         <div className="flex flex-wrap items-center justify-between gap-3">
           {/* Quick Assignee Chips */}
           <div className="flex items-center gap-1.5 flex-wrap">
@@ -304,7 +304,7 @@ export const KanbanBoard: React.FC = () => {
       </div>
 
       {/* Kanban Columns Canvas */}
-      <div className="flex-1 overflow-x-auto p-4 lg:p-6">
+      <div className="flex-1 min-h-0 overflow-x-auto p-3 sm:p-4 lg:p-6 snap-x snap-proximity">
         <div className="flex items-start gap-4 min-w-max h-full">
           {currentBoard.columns.map((column) => {
             const columnTasks = filteredBoardTasks.filter((t) => t.statusId === column.id);
@@ -317,7 +317,7 @@ export const KanbanBoard: React.FC = () => {
                 onDragOver={(e) => handleDragOver(e, column.id)}
                 onDragLeave={handleDragLeave}
                 onDrop={(e) => handleDrop(e, column.id)}
-                className={`w-72 sm:w-80 flex flex-col rounded-xl bg-slate-200/60 dark:bg-slate-900/90 border transition-all max-h-[calc(100vh-185px)] ${
+                className={`snap-start shrink-0 w-[82vw] max-w-xs sm:w-80 sm:max-w-none flex flex-col rounded-xl bg-slate-200/60 dark:bg-slate-900/90 border transition-all max-h-full ${
                   isDragOver
                     ? 'border-indigo-500 ring-2 ring-indigo-500/20 bg-indigo-50/20 dark:bg-indigo-950/20'
                     : isWipExceeded

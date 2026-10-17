@@ -261,9 +261,9 @@ export const TaskModal: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-      <div className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-5xl max-h-[92vh] flex flex-col overflow-hidden my-auto">
+      <div className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-5xl max-h-[96dvh] sm:max-h-[92vh] flex flex-col overflow-hidden my-auto">
         {/* Top Header */}
-        <div className="px-6 py-3.5 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-4 bg-slate-50/60 dark:bg-slate-900/80">
+        <div className="px-3 sm:px-6 py-3 sm:py-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 sm:gap-4 bg-slate-50/60 dark:bg-slate-900/80">
           <div className="flex items-center gap-3">
             {/* Issue Type selector */}
             <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700">
@@ -311,12 +311,12 @@ export const TaskModal: React.FC = () => {
               {isTimerRunningOnThis && activeTimer.isRunning ? (
                 <>
                   <Pause className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Pausar Cronômetro</span>
+                  <span className="hidden sm:inline">Pausar Cronômetro</span>
                 </>
               ) : (
                 <>
                   <Play className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Iniciar Cronômetro</span>
+                  <span className="hidden sm:inline">Iniciar Cronômetro</span>
                 </>
               )}
             </button>
@@ -360,7 +360,7 @@ export const TaskModal: React.FC = () => {
         {/* Modal Body - 2 Columns (Content Left 65%, Sidebar Right 35%) */}
         <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 dark:divide-slate-800">
           {/* Main Left Content */}
-          <div className="lg:col-span-8 p-6 space-y-6">
+          <div className="lg:col-span-8 p-4 sm:p-6 space-y-6">
             {/* Title (editable) */}
             <div>
               <input
@@ -1124,7 +1124,7 @@ export const TaskModal: React.FC = () => {
           </div>
 
           {/* Right Sidebar Details */}
-          <div className="lg:col-span-4 p-6 bg-slate-50/50 dark:bg-slate-900/40 space-y-5">
+          <div className="lg:col-span-4 p-4 sm:p-6 bg-slate-50/50 dark:bg-slate-900/40 space-y-5">
             {/* TIME TRACKING SUMMARY WIDGET */}
             <div className="bg-white dark:bg-slate-800 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2.5">
               <span className="text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">

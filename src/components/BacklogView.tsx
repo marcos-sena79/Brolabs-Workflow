@@ -61,7 +61,7 @@ export const BacklogView: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-100/60 dark:bg-slate-950 p-6 space-y-6">
+    <div className="flex-1 overflow-y-auto bg-slate-100/60 dark:bg-slate-950 p-3 sm:p-6 space-y-4 sm:space-y-6">
       {/* Top Banner */}
       <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -93,7 +93,7 @@ export const BacklogView: React.FC = () => {
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs overflow-hidden">
         <div
           onClick={() => setIsSprintOpen(!isSprintOpen)}
-          className="p-4 bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between cursor-pointer select-none"
+          className="p-3 sm:p-4 bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 cursor-pointer select-none"
         >
           <div className="flex items-center gap-2.5">
             {isSprintOpen ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
@@ -134,7 +134,7 @@ export const BacklogView: React.FC = () => {
                 <div
                   key={task.id}
                   onClick={() => setSelectedTaskModalId(task.id)}
-                  className="p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex items-center justify-between gap-4 cursor-pointer transition-colors text-xs"
+                  className="p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4 cursor-pointer transition-colors text-xs"
                 >
                   <div className="flex items-center gap-2.5 min-w-0 flex-1">
                     <IssueTypeIcon type={task.issueType} className="w-4 h-4 shrink-0" />
@@ -156,7 +156,7 @@ export const BacklogView: React.FC = () => {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 sm:shrink-0">
                     <PriorityIcon priority={task.priority} />
                     <span className="font-mono text-slate-600 dark:text-slate-400 text-[11px]">
                       {task.storyPoints}pt · {formatHours(task.estimatedHours)}
@@ -188,7 +188,7 @@ export const BacklogView: React.FC = () => {
       <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs overflow-hidden">
         <div
           onClick={() => setIsBacklogOpen(!isBacklogOpen)}
-          className="p-4 bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between cursor-pointer select-none"
+          className="p-3 sm:p-4 bg-slate-50/80 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 cursor-pointer select-none"
         >
           <div className="flex items-center gap-2.5">
             {isBacklogOpen ? <ChevronDown className="w-4 h-4 text-slate-400" /> : <ChevronRight className="w-4 h-4 text-slate-400" />}
@@ -216,7 +216,7 @@ export const BacklogView: React.FC = () => {
                 <div
                   key={task.id}
                   onClick={() => setSelectedTaskModalId(task.id)}
-                  className="p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex items-center justify-between gap-4 cursor-pointer transition-colors text-xs"
+                  className="p-3.5 hover:bg-slate-50 dark:hover:bg-slate-800/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2 sm:gap-4 cursor-pointer transition-colors text-xs"
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
                     <IssueTypeIcon type={task.issueType} className="w-4 h-4 shrink-0" />
@@ -224,7 +224,7 @@ export const BacklogView: React.FC = () => {
                     <span className="font-medium text-slate-800 dark:text-slate-200 truncate">{task.title}</span>
                   </div>
 
-                  <div className="flex items-center gap-3 shrink-0" onClick={(e) => e.stopPropagation()}>
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3 sm:shrink-0" onClick={(e) => e.stopPropagation()}>
                     <button
                       onClick={() => moveTask(task.id, 'col-todo')}
                       className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 rounded transition-colors"

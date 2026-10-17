@@ -11,11 +11,17 @@ import {
   ChevronRight,
   Flame,
   Keyboard,
+  X,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { ViewTab } from '../types';
 
-export const Sidebar: React.FC = () => {
+interface SidebarProps {
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   const {
     currentView,
     setCurrentView,
@@ -45,9 +51,29 @@ export const Sidebar: React.FC = () => {
   const enabledIntegrations = integrations.filter((i) => i.enabled).length;
 
   return (
-    <aside className="w-64 bg-slate-50/80 dark:bg-slate-900/60 border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between shrink-0 select-none overflow-y-auto">
+    <>
+    {isOpen && (
+      <div
+        className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-xs lg:hidden"
+        onClick={onClose}
+        aria-hidden="true"
+      />
+    )}
+    <aside
+      className={`fixed inset-y-0 left-0 z-50 w-72 max-w-[85vw] bg-slate-50 dark:bg-slate-900 lg:bg-slate-50/80 lg:dark:bg-slate-900/60 border-r border-slate-200 dark:border-slate-800 flex flex-col justify-between shrink-0 select-none overflow-y-auto transition-transform duration-200 lg:static lg:z-auto lg:w-64 lg:max-w-none lg:translate-x-0 ${
+        isOpen ? 'translate-x-0' : '-translate-x-full'
+      }`}
+    >
       {/* Top Section: Navigation Links */}
       <div className="p-3 space-y-6">
+        <button
+          onClick={onClose}
+          className="lg:hidden ml-auto flex items-center gap-1 text-[11px] font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 p-1"
+          aria-label="Fechar menu"
+        >
+          <X className="w-4 h-4" />
+          Fechar
+        </button>
         {/* Project Info Pill */}
         <div className="px-2 pt-1">
           <div className="flex items-center justify-between text-[11px] text-slate-500 font-semibold tracking-wider uppercase mb-1">
@@ -91,7 +117,7 @@ export const Sidebar: React.FC = () => {
                     </span>
                   )}
                   <kbd
-                    className={`text-[10px] font-mono px-1.5 py-0.2 rounded border transition-colors ${
+                    className={`hidden lg:inline text-[10px] font-mono px-1.5 py-0.2 rounded border transition-colors ${
                       isActive
                         ? 'bg-white/20 border-white/30 text-white font-bold'
                         : 'bg-slate-200/70 dark:bg-slate-800/80 border-slate-300 dark:border-slate-700 text-slate-400 group-hover:text-slate-600'
@@ -169,5 +195,6 @@ export const Sidebar: React.FC = () => {
         </button>
       </div>
     </aside>
+    </>
   );
 };

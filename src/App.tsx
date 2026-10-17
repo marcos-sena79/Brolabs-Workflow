@@ -18,6 +18,11 @@ import { EmailNotificationDrawer } from './components/EmailNotificationDrawer';
 
 const AppContent: React.FC = () => {
   const { currentView } = useAgile();
+  const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    setIsSidebarOpen(false);
+  }, [currentView]);
 
   const renderCurrentView = () => {
     switch (currentView) {
@@ -41,13 +46,13 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col h-screen w-screen bg-slate-100/70 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans antialiased">
+    <div className="flex flex-col     h-dvh w-full bg-slate-100/70 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans antialiased">
       {/* Top Jira-like Navigation */}
-      <Navbar />
+          <Navbar onMenuClick={() => setIsSidebarOpen(true)} />
 
       {/* Main Workspace (Sidebar + Dynamic View Area) */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-        <Sidebar />
+            <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {renderCurrentView()}
         </main>

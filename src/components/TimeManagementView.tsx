@@ -102,7 +102,7 @@ export const TimeManagementView: React.FC = () => {
   const todayStr = () => new Date().toISOString().split('T')[0];
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-100/60 dark:bg-slate-950 p-6 space-y-6">
+    <div className="flex-1 overflow-y-auto bg-slate-100/60 dark:bg-slate-950 p-3 sm:p-6 space-y-4 sm:space-y-6">
       {/* Top Banner */}
       <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>

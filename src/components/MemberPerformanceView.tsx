@@ -110,7 +110,7 @@ export const MemberPerformanceView: React.FC = () => {
   const selectedStats = memberStats.find((s) => s.member.id === selectedMember.id) || memberStats[0];
 
   return (
-    <div className="flex-1 overflow-y-auto bg-slate-100/60 dark:bg-slate-950 p-6 space-y-6">
+    <div className="flex-1 overflow-y-auto bg-slate-100/60 dark:bg-slate-950 p-3 sm:p-6 space-y-4 sm:space-y-6">
       {/* Banner */}
       <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xs">
         <div className="flex items-center gap-2">

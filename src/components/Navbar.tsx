@@ -18,11 +18,12 @@ import {
   Database,
   RefreshCw,
   Check,
+  Menu,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { formatHours, formatRelativeTime } from '../utils/agileHelpers';
 
-export const Navbar: React.FC = () => {
+export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) => {
   const {
     boards,
     currentBoardId,
@@ -96,10 +97,17 @@ export const Navbar: React.FC = () => {
   const enabledIntegrationsCount = integrations.filter((i) => i.enabled).length;
 
   return (
-    <header className="sticky top-0 z-30 h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-4 lg:px-6 flex items-center justify-between gap-4">
+    <header className="sticky top-0 z-30 h-14 sm:h-16 shrink-0 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 px-2 sm:px-4 lg:px-6 flex items-center justify-between gap-2 sm:gap-4">
       {/* Left: Branding & Board Selector */}
-      <div className="flex items-center gap-4">
-        <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-1 sm:gap-4 min-w-0">
+        <button
+          onClick={onMenuClick}
+          className="lg:hidden p-2 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md shrink-0"
+          aria-label="Abrir menu"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+        <div className="hidden sm:flex items-center gap-2.5 shrink-0">
           <div className="w-9 h-9 rounded-lg bg-indigo-600 flex items-center justify-center text-white shadow-sm shadow-indigo-200 dark:shadow-none">
             <Kanban className="w-5 h-5" />
           </div>
@@ -115,23 +123,23 @@ export const Navbar: React.FC = () => {
         <div className="h-6 w-px bg-slate-200 dark:bg-slate-800 hidden md:block" />
 
         {/* Board Dropdown */}
-        <div className="relative">
+        <div className="relative min-w-0">
           <button
             onClick={() => setIsBoardDropdownOpen(!isBoardDropdownOpen)}
             className="flex items-center gap-2 px-2.5 py-1.5 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors text-left"
           >
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            <div className="flex flex-col">
+            <div className="flex flex-col min-w-0">
               <span className="text-xs font-semibold text-slate-900 dark:text-slate-200 flex items-center gap-1.5">
-                {currentBoard.name}
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                <span className="truncate max-w-[110px] sm:max-w-none">{currentBoard.name}</span>
+                <ChevronDown className="w-3.5 h-3.5 text-slate-400 shrink-0" />
               </span>
-              <span className="text-[10px] text-slate-400">{currentBoard.sprintName}</span>
+              <span className="text-[10px] text-slate-400 truncate max-w-[130px] sm:max-w-none">{currentBoard.sprintName}</span>
             </div>
           </button>
 
           {isBoardDropdownOpen && (
-            <div className="absolute left-0 mt-2 w-72 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-2 z-50">
+            <div className="absolute left-0 mt-2 w-72 max-w-[calc(100vw-1rem)] bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-2 z-50">
               <div className="px-3 py-1.5 text-[11px] font-semibold uppercase text-slate-400 tracking-wider">
                 Quadros / Boards
               </div>
@@ -207,10 +215,17 @@ export const Navbar: React.FC = () => {
       </div>
 
       {/* Right Controls: Timer, User Switcher, Activity, New Task Button */}
-      <div className="flex items-center gap-2.5">
+      <div className="flex items-center gap-1 sm:gap-2.5 shrink-0">
+        <button
+          onClick={() => setIsCommandPaletteOpen(true)}
+          className="md:hidden p-2 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+          aria-label="Pesquisar"
+        >
+          <Search className="w-4 h-4" />
+        </button>
         {/* Active Live Timer */}
         {activeTimer && (
-          <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/80 px-2.5 py-1 rounded-md text-xs">
+          <div className="flex items-center gap-1.5 sm:gap-2 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800/80 px-1.5 sm:px-2.5 py-1 rounded-md text-xs">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping" />
             <div className="flex flex-col">
               <span className="font-mono font-semibold text-emerald-700 dark:text-emerald-300 text-xs leading-none">
@@ -271,7 +286,7 @@ export const Navbar: React.FC = () => {
         {/* Keyboard Shortcuts Trigger */}
         <button
           onClick={() => setIsShortcutsModalOpen(true)}
-          className="p-2 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+          className="hidden md:block p-2 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
           title="Atalhos de Teclado (Pressione '?')"
         >
           <Keyboard className="w-4 h-4" />
@@ -303,7 +318,7 @@ export const Navbar: React.FC = () => {
           </button>
 
           {isActivityOpen && (
-            <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-2xl py-2 z-50">
+            <div className="fixed left-2 right-2 top-14 sm:absolute sm:left-auto sm:right-0 sm:top-auto mt-2 sm:w-96 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-2xl py-2 z-50">
               <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-bold text-slate-800 dark:text-slate-100">Atividades em Tempo Real</span>
@@ -363,7 +378,7 @@ export const Navbar: React.FC = () => {
           </button>
 
           {isUserDropdownOpen && (
-            <div className="absolute right-0 mt-2 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-2 z-50">
+            <div className="fixed left-2 right-2 top-14 sm:absolute sm:left-auto sm:right-0 sm:top-auto mt-2 sm:w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-2 z-50">
               <div className="px-3 py-1.5 text-[11px] font-semibold uppercase text-slate-400 tracking-wider">
                 Alternar Usuário Atual
               </div>
@@ -393,10 +408,10 @@ export const Navbar: React.FC = () => {
         <button
           onClick={() => setIsCreateModalOpen(true)}
           title="Criar Tarefa (Atalho: Pressione 'C')"
-          className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-semibold px-3 py-2 rounded-md shadow-sm transition-colors"
+          className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-semibold px-2.5 sm:px-3 py-2 rounded-md shadow-sm transition-colors"
         >
           <Plus className="w-3.5 h-3.5" />
-          <span>Criar Tarefa</span>
+          <span className="hidden sm:inline">Criar Tarefa</span>
           <kbd className="hidden sm:inline-block ml-1 px-1 py-0.2 rounded text-[10px] font-mono bg-indigo-700/80 text-indigo-100 border border-indigo-500/40">
             C
           </kbd>
