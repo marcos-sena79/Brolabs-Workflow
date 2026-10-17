@@ -7,7 +7,6 @@ import {
   BarChart3,
   Users,
   Radio,
-  RotateCcw,
   Sparkles,
   ChevronRight,
   Flame,
@@ -22,7 +21,6 @@ export const Sidebar: React.FC = () => {
     setCurrentView,
     currentBoard,
     boardTasks,
-    resetToDemoData,
     integrations,
     setIsShortcutsModalOpen,
   } = useAgile();
@@ -168,19 +166,6 @@ export const Sidebar: React.FC = () => {
           <kbd className="text-[10px] font-mono px-1.5 py-0.2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded text-slate-400">
             ?
           </kbd>
-        </button>
-
-        <button
-          onClick={() => {
-            if (confirm('Deseja restaurar os dados de demonstração com tarefas, membros e horas preenchidas?')) {
-              resetToDemoData();
-            }
-          }}
-          className="w-full flex items-center justify-center gap-2 py-1.5 px-2 text-[11px] font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-800 rounded-md transition-colors"
-          title="Restaura o estado inicial da demonstração"
-        >
-          <RotateCcw className="w-3.5 h-3.5" />
-          Restaurar Dados Demo
         </button>
       </div>
     </aside>
