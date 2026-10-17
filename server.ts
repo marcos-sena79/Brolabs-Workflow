@@ -14,16 +14,34 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = 3000;
 const isProduction = process.env.NODE_ENV === 'production';
+const isVercel = Boolean(process.env.VERCEL);
 
 app.use(express.json({ limit: '10mb' }));
 
-// Storage Bucket for member avatars and assets
-const bucketDir = path.resolve(process.cwd(), 'bucket');
+// Storage Bucket for member avatars and assets (served by Vite from /public)
+const bucketDir = path.resolve(process.cwd(), 'public', 'bucket');
 const avatarsDir = path.resolve(bucketDir, 'avatars');
-if (!fs.existsSync(avatarsDir)) {
+if (!isVercel && !fs.existsSync(avatarsDir)) {
   fs.mkdirSync(avatarsDir, { recursive: true });
 }
 app.use('/bucket', express.static(bucketDir));
+
+// Serverless: initialize the database once per cold start
+let dbReady: Promise<void> | null = null;
+if (isVercel) {
+  app.use('/api', async (req, res, next) => {
+    try {
+      dbReady ??= initializeDatabase().catch((err) => {
+        dbReady = null;
+        throw err;
+      });
+      await dbReady;
+      next();
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+}
 
 // CORS headers
 app.use((req, res, next) => {
@@ -589,12 +607,17 @@ app.post('/api/bucket/upload', async (req, res) => {
 
     const cleanMemberId = (memberId || 'upload').replace(/[^a-zA-Z0-9_-]/g, '_');
     const finalFilename = `${cleanMemberId}-${Date.now()}.${ext}`;
-    const filePath = path.resolve(avatarsDir, finalFilename);
-
     const buffer = Buffer.from(base64Data, 'base64');
-    fs.writeFileSync(filePath, buffer);
 
-    const publicUrl = `/bucket/avatars/${finalFilename}`;
+    // Vercel's filesystem is read-only/ephemeral: persist the image as a data URL in the DB
+    let publicUrl: string;
+    if (isVercel) {
+      const mimeType = ext === 'jpg' ? 'image/jpeg' : ext === 'svg' ? 'image/svg+xml' : `image/${ext}`;
+      publicUrl = `data:${mimeType};base64,${buffer.toString('base64')}`;
+    } else {
+      fs.writeFileSync(path.resolve(avatarsDir, finalFilename), buffer);
+      publicUrl = `/bucket/avatars/${finalFilename}`;
+    }
 
     if (memberId) {
       await query('UPDATE members SET avatar = $1 WHERE id = $2', [publicUrl, memberId]);
@@ -814,4 +837,8 @@ async function startServer() {
   }
 }
 
-startServer();
+if (!isVercel) {
+  startServer();
+}
+
+export default app;
