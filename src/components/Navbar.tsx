@@ -275,7 +275,7 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
           title="Status do banco de dados Neon PostgreSQL"
         >
           <Database className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-          <span className="font-semibold hidden sm:inline">NeonDB</span>
+          <span className="font-semibold hidden sm:inline">Brolabs - DB</span>
           <span
             className={`w-2 h-2 rounded-full ${
               isLoading ? 'bg-amber-500 animate-ping' : dbConnected ? 'bg-emerald-500' : 'bg-rose-500'
@@ -567,50 +567,6 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
                   <span className="text-[10px] text-slate-500 dark:text-slate-400">Membros</span>
                 </div>
               </div>
-            </div>
-
-            <div className="pt-2 flex flex-col gap-2">
-              <button
-                disabled={isSyncing}
-                onClick={async () => {
-                  setIsSyncing(true);
-                  try {
-                    await refetchDbData();
-                    setSyncSuccess(true);
-                    setTimeout(() => setSyncSuccess(false), 2000);
-                  } catch (e) {
-                    console.error(e);
-                  } finally {
-                    setIsSyncing(false);
-                  }
-                }}
-                className="w-full flex items-center justify-center gap-2 py-2 px-3 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white transition-colors cursor-pointer disabled:opacity-50"
-              >
-                {syncSuccess ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-white" />
-                    <span>Sincronizado com NeonDB!</span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                    <span>{isSyncing ? 'Sincronizando...' : 'Recarregar dados do NeonDB'}</span>
-                  </>
-                )}
-              </button>
-
-              <button
-                type="button"
-                onClick={async () => {
-                  if (confirm('Deseja resetar e re-semear os dados base no banco Neon PostgreSQL?')) {
-                    await resetToDemoData();
-                    setIsDbModalOpen(false);
-                  }
-                }}
-                className="w-full py-1.5 px-3 text-xs text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 transition-colors"
-              >
-                Restaurar dados base de exemplo no NeonDB
-              </button>
             </div>
           </div>
         </div>
