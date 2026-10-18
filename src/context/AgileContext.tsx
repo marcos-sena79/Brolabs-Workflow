@@ -17,6 +17,7 @@ import {
   DependencyType,
 } from '../types';
 import { api } from '../services/api';
+import { useAuth } from './AuthContext';
 
 interface ActiveTimer {
   taskId: string;
@@ -54,6 +55,11 @@ interface AgileContextType {
   isCreateModalOpen: boolean;
   isShortcutsModalOpen: boolean;
   isCommandPaletteOpen: boolean;
+
+  // Authentication
+  isAuthenticated: boolean;
+  login: (token: string, member: Member) => void;
+  logout: () => void;
 
   // Database Connection Status
   isLoading: boolean;
@@ -181,6 +187,9 @@ const DEFAULT_MEMBER: Member = {
 const AgileContext = createContext<AgileContextType | undefined>(undefined);
 
 export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
+  // Authentication (from AuthContext)
+  const { member: authMember, login: authLogin, logout: authLogout, isAuthenticated: authIsAuthenticated, isLoading: authIsLoading } = useAuth();
+
   const [isLoading, setIsLoading] = useState(true);
   const [dbConnected, setDbConnected] = useState(true);
 
@@ -499,8 +508,9 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   }, [boards, currentBoardId]);
 
   const currentUser = useMemo(() => {
+    if (authMember) return authMember;
     return members.find((m) => m.id === currentUserId) || members[0] || DEFAULT_MEMBER;
-  }, [members, currentUserId]);
+  }, [members, currentUserId, authMember]);
 
   // Tasks for current board
   const boardTasks = useMemo(() => {
@@ -1481,7 +1491,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         isCreateModalOpen,
         isShortcutsModalOpen,
         isCommandPaletteOpen,
-        isLoading,
+        isLoading: isLoading || authIsLoading,
         dbConnected,
         refetchDbData: fetchDbData,
         setCurrentBoardId,
@@ -1515,6 +1525,9 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         resumeTimer,
         stopTimer,
         stopTimerAndLogWork,
+        login: authLogin,
+        logout: authLogout,
+        isAuthenticated: authIsAuthenticated,
         resetToDemoData,
         emailNotifications,
         emailSettings,

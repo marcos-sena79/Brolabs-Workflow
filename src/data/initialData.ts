@@ -10,6 +10,7 @@ export const INITIAL_MEMBERS: Member[] = [
     department: 'Engenharia',
     weeklyCapacityHours: 40,
     active: true,
+    passwordHash: '$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2.',
   },
   {
     id: 'mem-2',
@@ -20,6 +21,7 @@ export const INITIAL_MEMBERS: Member[] = [
     department: 'Engenharia',
     weeklyCapacityHours: 40,
     active: true,
+    passwordHash: '$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2.',
   },
   {
     id: 'mem-3',
@@ -30,6 +32,7 @@ export const INITIAL_MEMBERS: Member[] = [
     department: 'Engenharia',
     weeklyCapacityHours: 40,
     active: true,
+    passwordHash: '$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2.',
   },
   {
     id: 'mem-4',
@@ -40,6 +43,7 @@ export const INITIAL_MEMBERS: Member[] = [
     department: 'Produto',
     weeklyCapacityHours: 40,
     active: true,
+    passwordHash: '$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2.',
   },
   {
     id: 'mem-5',
@@ -50,6 +54,7 @@ export const INITIAL_MEMBERS: Member[] = [
     department: 'Infraestrutura',
     weeklyCapacityHours: 40,
     active: true,
+    passwordHash: '$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2.',
   },
 ];
 

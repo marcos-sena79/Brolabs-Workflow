@@ -11,6 +11,7 @@ export interface Member {
   department: string;
   weeklyCapacityHours: number;
   active: boolean;
+  passwordHash?: string;
 }
 
 export interface SubTask {

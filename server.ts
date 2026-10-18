@@ -3,8 +3,18 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import dotenv from 'dotenv';
+import cookieParser from 'cookie-parser';
 import { pool, query } from './src/server/db';
 import { initializeDatabase, seedDatabase } from './src/server/initDb';
+import {
+  authenticateToken,
+  generateToken,
+  hashPassword,
+  comparePassword,
+  findMemberByEmail,
+  findMemberById,
+  updateLastLogin,
+} from './src/server/auth';
 
 dotenv.config();
 
@@ -17,6 +27,7 @@ const isProduction = process.env.NODE_ENV === 'production';
 const isVercel = Boolean(process.env.VERCEL);
 
 app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
 
 // Storage Bucket for member avatars and assets (served by Vite from /public)
 const bucketDir = path.resolve(process.cwd(), 'public', 'bucket');
@@ -309,7 +320,7 @@ app.post('/api/reset-database', async (req, res) => {
 });
 
 // App Settings update
-app.put('/api/app-settings/:key', async (req, res) => {
+app.put('/api/app-settings/:key', authenticateToken, async (req, res) => {
   try {
     const { key } = req.params;
     const { value } = req.body;
@@ -324,9 +335,126 @@ app.put('/api/app-settings/:key', async (req, res) => {
   }
 });
 
+// --- AUTH ENDPOINTS --- //
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { name, email, password, role, department, weeklyCapacityHours } =
+      req.body;
+
+    if (!email || !password || !name) {
+      return res.status(400).json({
+        error: 'Nome, e-mail e senha são obrigatórios',
+      });
+    }
+
+    const existing = await findMemberByEmail(email);
+    if (existing) {
+      return res.status(409).json({ error: 'E-mail já cadastrado' });
+    }
+
+    const passwordHash = await hashPassword(password);
+    const id = `mem-${Date.now()}`;
+
+    await query(
+      `INSERT INTO members (id, name, email, avatar, role, department, weekly_capacity_hours, active, password_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        id,
+        name,
+        email,
+        '',
+        role || '',
+        department || '',
+        weeklyCapacityHours || 40,
+        true,
+        passwordHash,
+      ]
+    );
+
+    const memberRow = await findMemberById(id);
+    const member = mapDbMember(memberRow);
+
+    const token = generateToken(id);
+    res.cookie('token', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    res.status(201).json({ success: true, token, member });
+  } catch (error: any) {
+    console.error('Error registering member:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'E-mail e senha são obrigatórios' });
+    }
+
+    const memberRow = await findMemberByEmail(email);
+    if (!memberRow) {
+      return res.status(401).json({ error: 'E-mail ou senha incorretos' });
+    }
+
+    const passwordValid = await comparePassword(password, memberRow.password_hash || '');
+    if (!passwordValid) {
+      return res.status(401).json({ error: 'E-mail ou senha incorretos' });
+    }
+
+    await updateLastLogin(memberRow.id);
+
+    const token = generateToken(memberRow.id);
+    const member = mapDbMember(memberRow);
+
+    res.cookie('token', token, {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    res.json({ success: true, token, member });
+  } catch (error: any) {
+    console.error('Error logging in:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  try {
+    res.clearCookie('token');
+    res.json({ success: true, message: 'Desconectado com sucesso' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/auth/me', authenticateToken, async (req, res) => {
+  try {
+    const memberId = req.memberId;
+    if (!memberId) {
+      return res.status(401).json({ error: 'Não autenticado' });
+    }
+    const memberRow = await findMemberById(memberId);
+    if (!memberRow) {
+      return res.status(404).json({ error: 'Membro não encontrado' });
+    }
+    res.json({ success: true, member: mapDbMember(memberRow) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- TASKS ENDPOINTS --- //
 
-app.post('/api/tasks', async (req, res) => {
+app.post('/api/tasks', authenticateToken, async (req, res) => {
   try {
     const t = req.body;
     await query(
@@ -372,7 +500,7 @@ app.post('/api/tasks', async (req, res) => {
   }
 });
 
-app.put('/api/tasks/:id', async (req, res) => {
+app.put('/api/tasks/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -426,7 +554,7 @@ app.put('/api/tasks/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/tasks/:id', async (req, res) => {
+app.delete('/api/tasks/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM tasks WHERE id = $1', [id]);
@@ -439,7 +567,7 @@ app.delete('/api/tasks/:id', async (req, res) => {
 
 // --- BOARDS ENDPOINTS --- //
 
-app.post('/api/boards', async (req, res) => {
+app.post('/api/boards', authenticateToken, async (req, res) => {
   try {
     const b = req.body;
     await query(
@@ -465,7 +593,7 @@ app.post('/api/boards', async (req, res) => {
   }
 });
 
-app.put('/api/boards/:id', async (req, res) => {
+app.put('/api/boards/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -505,7 +633,7 @@ app.put('/api/boards/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/boards/:id', async (req, res) => {
+app.delete('/api/boards/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM tasks WHERE board_id = $1', [id]);
@@ -519,7 +647,7 @@ app.delete('/api/boards/:id', async (req, res) => {
 
 // --- MEMBERS ENDPOINTS --- //
 
-app.post('/api/members', async (req, res) => {
+app.post('/api/members', authenticateToken, async (req, res) => {
   try {
     const m = req.body;
     await query(
@@ -534,7 +662,7 @@ app.post('/api/members', async (req, res) => {
   }
 });
 
-app.put('/api/members/:id', async (req, res) => {
+app.put('/api/members/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;

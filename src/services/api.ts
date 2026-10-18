@@ -35,6 +35,24 @@ export interface HealthResponse {
   totalBoards: number;
 }
 
+export interface AuthLoginResponse {
+  token: string;
+  member: Member;
+}
+
+export interface AuthRegisterResponse {
+  token: string;
+  member: Member;
+}
+
+function getAuthHeaders(): HeadersInit {
+  const token = localStorage.getItem('brolabs_token');
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 export const api = {
   async getHealth(): Promise<HealthResponse> {
     const res = await fetch('/api/health');
@@ -57,7 +75,7 @@ export const api = {
   async setAppSetting(key: string, value: any): Promise<void> {
     await fetch(`/api/app-settings/${encodeURIComponent(key)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ value }),
     });
   },
@@ -66,7 +84,7 @@ export const api = {
   async createTask(task: Task): Promise<Task> {
     const res = await fetch('/api/tasks', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(task),
     });
     if (!res.ok) throw new Error('Falha ao criar tarefa no NeonDB');
@@ -77,7 +95,7 @@ export const api = {
   async updateTask(id: string, updates: Partial<Task>): Promise<Task> {
     const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     });
     if (!res.ok) throw new Error('Falha ao atualizar tarefa no NeonDB');
@@ -88,6 +106,7 @@ export const api = {
   async deleteTask(id: string): Promise<void> {
     const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+      headers: getAuthHeaders(),
     });
     if (!res.ok) throw new Error('Falha ao remover tarefa no NeonDB');
   },
@@ -96,7 +115,7 @@ export const api = {
   async createBoard(board: Board): Promise<Board> {
     const res = await fetch('/api/boards', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(board),
     });
     if (!res.ok) throw new Error('Falha ao criar board no NeonDB');
@@ -107,7 +126,7 @@ export const api = {
   async updateBoard(id: string, updates: Partial<Board>): Promise<Board> {
     const res = await fetch(`/api/boards/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     });
     if (!res.ok) throw new Error('Falha ao atualizar board no NeonDB');
@@ -118,6 +137,7 @@ export const api = {
   async deleteBoard(id: string): Promise<void> {
     const res = await fetch(`/api/boards/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+      headers: getAuthHeaders(),
     });
     if (!res.ok) throw new Error('Falha ao deletar board no NeonDB');
   },
@@ -126,7 +146,7 @@ export const api = {
   async createMember(member: Member): Promise<Member> {
     const res = await fetch('/api/members', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(member),
     });
     if (!res.ok) throw new Error('Falha ao cadastrar membro no NeonDB');
@@ -137,7 +157,7 @@ export const api = {
   async updateMember(id: string, updates: Partial<Member>): Promise<Member> {
     const res = await fetch(`/api/members/${encodeURIComponent(id)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     });
     if (!res.ok) throw new Error('Falha ao atualizar membro no NeonDB');
@@ -245,5 +265,59 @@ export const api = {
     if (!res.ok) throw new Error('Falha ao listar arquivos do bucket');
     const data = await res.json();
     return data.files || [];
+  },
+
+  // Auth
+  async login(credentials: {
+    email: string;
+    password: string;
+  }): Promise<AuthLoginResponse> {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(credentials),
+    });
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Falha ao fazer login');
+    }
+    return res.json();
+  },
+
+  async register(memberData: {
+    id: string;
+    name: string;
+    email: string;
+    password: string;
+    role: string;
+    department: string;
+    weeklyCapacityHours: number;
+    active: boolean;
+  }): Promise<AuthRegisterResponse> {
+    const res = await fetch('/api/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(memberData),
+    });
+    if (!res.ok) {
+      const errorData = await res.json().catch(() => ({}));
+      throw new Error(errorData.error || 'Falha ao cadastrar membro');
+    }
+    return res.json();
+  },
+
+  async logout(): Promise<void> {
+    await fetch('/api/auth/logout', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+  },
+
+  async me(): Promise<{ member: Member }> {
+    const res = await fetch('/api/auth/me', {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao validar sessão');
+    return res.json();
   },
 };

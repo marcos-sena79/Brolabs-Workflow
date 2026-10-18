@@ -36,17 +36,31 @@ export async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS members (
       id VARCHAR(100) PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
-      email VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL UNIQUE,
       avatar TEXT,
       role VARCHAR(150),
       department VARCHAR(150),
       weekly_capacity_hours FLOAT DEFAULT 40,
       active BOOLEAN DEFAULT TRUE,
+      password_hash VARCHAR(255),
+      email_verified BOOLEAN DEFAULT FALSE,
+      last_login_at TIMESTAMP WITH TIME ZONE,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
   `);
 
-  // 3. Create tasks table
+  // 3. Create sessions table (auth)
+  await query(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id VARCHAR(100) PRIMARY KEY,
+      member_id VARCHAR(100) NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      token_hash VARCHAR(255) NOT NULL,
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `);
+
+  // 4. Create tasks table
   await query(`
     CREATE TABLE IF NOT EXISTS tasks (
       id VARCHAR(100) PRIMARY KEY,
@@ -159,6 +173,15 @@ export async function initializeDatabase() {
     );
   `);
 
+  // 10. Migrations: add auth columns to existing members table if missing
+  await query(`ALTER TABLE members ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)`);
+  await query(`ALTER TABLE members ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE`);
+  await query(`ALTER TABLE members ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE`);
+
+  // Ensure existing members have a default password hash (123456) so login works after migration
+  const defaultHash = '$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2.';
+  await query(`UPDATE members SET password_hash = $1 WHERE password_hash IS NULL`, [defaultHash]);
+
   console.log('✅ NeonDB tables ready.');
 
   // Check if database needs initial seeding
@@ -211,9 +234,9 @@ export async function seedDatabase() {
     // Insert members
     for (const m of INITIAL_MEMBERS) {
       await client.query(
-        `INSERT INTO members (id, name, email, avatar, role, department, weekly_capacity_hours, active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [m.id, m.name, m.email, m.avatar, m.role, m.department, m.weeklyCapacityHours, m.active]
+        `INSERT INTO members (id, name, email, avatar, role, department, weekly_capacity_hours, active, password_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [m.id, m.name, m.email, m.avatar, m.role, m.department, m.weeklyCapacityHours, m.active, m.passwordHash || null]
       );
     }
 

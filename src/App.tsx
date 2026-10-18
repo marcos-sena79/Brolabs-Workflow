@@ -1,4 +1,6 @@
 import React from 'react';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
 import { AgileProvider, useAgile } from './context/AgileContext';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
@@ -15,6 +17,9 @@ import { ShortcutsModal } from './components/ShortcutsModal';
 import { CommandPalette } from './components/CommandPalette';
 import { EmailAlertToast } from './components/EmailAlertToast';
 import { EmailNotificationDrawer } from './components/EmailNotificationDrawer';
+import { LoginPage } from './pages/LoginPage';
+import { RegisterPage } from './pages/RegisterPage';
+import { PrivateRoute } from './components/PrivateRoute';
 
 const AppContent: React.FC = () => {
   const { currentView } = useAgile();
@@ -46,13 +51,13 @@ const AppContent: React.FC = () => {
   };
 
   return (
-    <div className="flex flex-col     h-dvh w-full bg-slate-100/70 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans antialiased">
+    <div className="flex flex-col h-dvh w-full bg-slate-100/70 dark:bg-slate-950 text-slate-900 dark:text-slate-100 overflow-hidden font-sans antialiased">
       {/* Top Jira-like Navigation */}
-          <Navbar onMenuClick={() => setIsSidebarOpen(true)} />
+      <Navbar onMenuClick={() => setIsSidebarOpen(true)} />
 
       {/* Main Workspace (Sidebar + Dynamic View Area) */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
-            <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
+        <Sidebar isOpen={isSidebarOpen} onClose={() => setIsSidebarOpen(false)} />
         <main className="flex-1 flex flex-col min-w-0 overflow-hidden">
           {renderCurrentView()}
         </main>
@@ -71,8 +76,24 @@ const AppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <AgileProvider>
-      <AppContent />
-    </AgileProvider>
+    <AuthProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
+          <Route
+            element={
+              <PrivateRoute>
+                <AgileProvider>
+                  <AppContent />
+                </AgileProvider>
+              </PrivateRoute>
+            }
+          >
+            <Route path="/" element={<AppContent />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </AuthProvider>
   );
 }

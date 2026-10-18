@@ -4,6 +4,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
 import dotenv2 from "dotenv";
+import cookieParser from "cookie-parser";
 
 // src/server/db.ts
 import { Pool } from "pg";
@@ -39,7 +40,8 @@ var INITIAL_MEMBERS = [
     role: "Tech Lead & Arquiteto",
     department: "Engenharia",
     weeklyCapacityHours: 40,
-    active: true
+    active: true,
+    passwordHash: "$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2."
   },
   {
     id: "mem-2",
@@ -49,7 +51,8 @@ var INITIAL_MEMBERS = [
     role: "Engenheira Full Stack S\xEAnior",
     department: "Engenharia",
     weeklyCapacityHours: 40,
-    active: true
+    active: true,
+    passwordHash: "$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2."
   },
   {
     id: "mem-3",
@@ -59,7 +62,8 @@ var INITIAL_MEMBERS = [
     role: "Engenheiro Frontend Pleno",
     department: "Engenharia",
     weeklyCapacityHours: 40,
-    active: true
+    active: true,
+    passwordHash: "$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2."
   },
   {
     id: "mem-4",
@@ -69,7 +73,8 @@ var INITIAL_MEMBERS = [
     role: "Product Designer UX/UI",
     department: "Produto",
     weeklyCapacityHours: 40,
-    active: true
+    active: true,
+    passwordHash: "$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2."
   },
   {
     id: "mem-5",
@@ -79,7 +84,8 @@ var INITIAL_MEMBERS = [
     role: "DevOps & QA Engineer",
     department: "Infraestrutura",
     weeklyCapacityHours: 40,
-    active: true
+    active: true,
+    passwordHash: "$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2."
   }
 ];
 var INITIAL_BOARDS = [
@@ -652,12 +658,24 @@ async function initializeDatabase() {
     CREATE TABLE IF NOT EXISTS members (
       id VARCHAR(100) PRIMARY KEY,
       name VARCHAR(255) NOT NULL,
-      email VARCHAR(255) NOT NULL,
+      email VARCHAR(255) NOT NULL UNIQUE,
       avatar TEXT,
       role VARCHAR(150),
       department VARCHAR(150),
       weekly_capacity_hours FLOAT DEFAULT 40,
       active BOOLEAN DEFAULT TRUE,
+      password_hash VARCHAR(255),
+      email_verified BOOLEAN DEFAULT FALSE,
+      last_login_at TIMESTAMP WITH TIME ZONE,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `);
+  await query(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      id VARCHAR(100) PRIMARY KEY,
+      member_id VARCHAR(100) NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+      token_hash VARCHAR(255) NOT NULL,
+      expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
       created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
     );
   `);
@@ -760,6 +778,11 @@ async function initializeDatabase() {
       value JSONB NOT NULL
     );
   `);
+  await query(`ALTER TABLE members ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255)`);
+  await query(`ALTER TABLE members ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT FALSE`);
+  await query(`ALTER TABLE members ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMP WITH TIME ZONE`);
+  const defaultHash = "$2a$12$aJlOVNw1E1GbhxlXMc1lx..mmUgs3Yo5X2vni1uhH5iDFK5r37H2.";
+  await query(`UPDATE members SET password_hash = $1 WHERE password_hash IS NULL`, [defaultHash]);
   console.log("\u2705 NeonDB tables ready.");
   const boardCount = await query("SELECT COUNT(*) FROM boards");
   if (parseInt(boardCount.rows[0].count, 10) === 0) {
@@ -803,9 +826,9 @@ async function seedDatabase() {
     }
     for (const m of INITIAL_MEMBERS) {
       await client.query(
-        `INSERT INTO members (id, name, email, avatar, role, department, weekly_capacity_hours, active)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [m.id, m.name, m.email, m.avatar, m.role, m.department, m.weeklyCapacityHours, m.active]
+        `INSERT INTO members (id, name, email, avatar, role, department, weekly_capacity_hours, active, password_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [m.id, m.name, m.email, m.avatar, m.role, m.department, m.weeklyCapacityHours, m.active, m.passwordHash || null]
       );
     }
     for (const t of INITIAL_TASKS) {
@@ -931,6 +954,59 @@ async function seedDatabase() {
   }
 }
 
+// src/server/auth.ts
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+var JWT_SECRET = process.env.JWT_SECRET || "brolabs_workflow_secret_dev_2026";
+var JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "24h";
+var SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS) || 12;
+async function hashPassword(plainPassword) {
+  return bcrypt.hash(plainPassword, SALT_ROUNDS);
+}
+async function comparePassword(plainPassword, hash) {
+  return bcrypt.compare(plainPassword, hash);
+}
+function generateToken(memberId) {
+  return jwt.sign({ memberId }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+}
+function verifyToken(token) {
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET);
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers.authorization;
+  const tokenFromHeader = authHeader?.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+  const tokenFromCookie = req.cookies?.token;
+  const token = tokenFromHeader || tokenFromCookie;
+  if (!token) {
+    return res.status(401).json({ error: "N\xE3o autenticado. Token ausente." });
+  }
+  const payload = verifyToken(token);
+  if (!payload) {
+    return res.status(403).json({ error: "Token inv\xE1lido ou expirado." });
+  }
+  req.memberId = payload.memberId;
+  next();
+}
+async function findMemberByEmail(email) {
+  const res = await query("SELECT * FROM members WHERE email = $1", [email]);
+  return res.rows.length > 0 ? res.rows[0] : null;
+}
+async function findMemberById(memberId) {
+  const res = await query("SELECT * FROM members WHERE id = $1", [memberId]);
+  return res.rows.length > 0 ? res.rows[0] : null;
+}
+async function updateLastLogin(memberId) {
+  await query(
+    "UPDATE members SET last_login_at = NOW() WHERE id = $1",
+    [memberId]
+  );
+}
+
 // server.ts
 dotenv2.config();
 var __filename = fileURLToPath(import.meta.url);
@@ -940,6 +1016,7 @@ var PORT = 3e3;
 var isProduction = process.env.NODE_ENV === "production";
 var isVercel = Boolean(process.env.VERCEL);
 app.use(express.json({ limit: "10mb" }));
+app.use(cookieParser());
 var bucketDir = path.resolve(process.cwd(), "public", "bucket");
 var avatarsDir = path.resolve(bucketDir, "avatars");
 if (!isVercel && !fs.existsSync(avatarsDir)) {
@@ -1199,7 +1276,7 @@ app.post("/api/reset-database", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.put("/api/app-settings/:key", async (req, res) => {
+app.put("/api/app-settings/:key", authenticateToken, async (req, res) => {
   try {
     const { key } = req.params;
     const { value } = req.body;
@@ -1213,7 +1290,103 @@ app.put("/api/app-settings/:key", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.post("/api/tasks", async (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
+  try {
+    const { name, email, password, role, department, weeklyCapacityHours } = req.body;
+    if (!email || !password || !name) {
+      return res.status(400).json({
+        error: "Nome, e-mail e senha s\xE3o obrigat\xF3rios"
+      });
+    }
+    const existing = await findMemberByEmail(email);
+    if (existing) {
+      return res.status(409).json({ error: "E-mail j\xE1 cadastrado" });
+    }
+    const passwordHash = await hashPassword(password);
+    const id = `mem-${Date.now()}`;
+    await query(
+      `INSERT INTO members (id, name, email, avatar, role, department, weekly_capacity_hours, active, password_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        id,
+        name,
+        email,
+        "",
+        role || "",
+        department || "",
+        weeklyCapacityHours || 40,
+        true,
+        passwordHash
+      ]
+    );
+    const memberRow = await findMemberById(id);
+    const member = mapDbMember(memberRow);
+    const token = generateToken(id);
+    res.cookie("token", token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 24 * 60 * 60 * 1e3
+    });
+    res.status(201).json({ success: true, token, member });
+  } catch (error) {
+    console.error("Error registering member:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) {
+      return res.status(400).json({ error: "E-mail e senha s\xE3o obrigat\xF3rios" });
+    }
+    const memberRow = await findMemberByEmail(email);
+    if (!memberRow) {
+      return res.status(401).json({ error: "E-mail ou senha incorretos" });
+    }
+    const passwordValid = await comparePassword(password, memberRow.password_hash || "");
+    if (!passwordValid) {
+      return res.status(401).json({ error: "E-mail ou senha incorretos" });
+    }
+    await updateLastLogin(memberRow.id);
+    const token = generateToken(memberRow.id);
+    const member = mapDbMember(memberRow);
+    res.cookie("token", token, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      maxAge: 24 * 60 * 60 * 1e3
+    });
+    res.json({ success: true, token, member });
+  } catch (error) {
+    console.error("Error logging in:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+app.post("/api/auth/logout", async (req, res) => {
+  try {
+    res.clearCookie("token");
+    res.json({ success: true, message: "Desconectado com sucesso" });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+app.get("/api/auth/me", authenticateToken, async (req, res) => {
+  try {
+    const memberId = req.memberId;
+    if (!memberId) {
+      return res.status(401).json({ error: "N\xE3o autenticado" });
+    }
+    const memberRow = await findMemberById(memberId);
+    if (!memberRow) {
+      return res.status(404).json({ error: "Membro n\xE3o encontrado" });
+    }
+    res.json({ success: true, member: mapDbMember(memberRow) });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+app.post("/api/tasks", authenticateToken, async (req, res) => {
   try {
     const t = req.body;
     await query(
@@ -1257,7 +1430,7 @@ app.post("/api/tasks", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.put("/api/tasks/:id", async (req, res) => {
+app.put("/api/tasks/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -1305,7 +1478,7 @@ app.put("/api/tasks/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.delete("/api/tasks/:id", async (req, res) => {
+app.delete("/api/tasks/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     await query("DELETE FROM tasks WHERE id = $1", [id]);
@@ -1315,7 +1488,7 @@ app.delete("/api/tasks/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.post("/api/boards", async (req, res) => {
+app.post("/api/boards", authenticateToken, async (req, res) => {
   try {
     const b = req.body;
     await query(
@@ -1340,7 +1513,7 @@ app.post("/api/boards", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.put("/api/boards/:id", async (req, res) => {
+app.put("/api/boards/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -1375,7 +1548,7 @@ app.put("/api/boards/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.delete("/api/boards/:id", async (req, res) => {
+app.delete("/api/boards/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     await query("DELETE FROM tasks WHERE board_id = $1", [id]);
@@ -1386,7 +1559,7 @@ app.delete("/api/boards/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.post("/api/members", async (req, res) => {
+app.post("/api/members", authenticateToken, async (req, res) => {
   try {
     const m = req.body;
     await query(
@@ -1400,7 +1573,7 @@ app.post("/api/members", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.put("/api/members/:id", async (req, res) => {
+app.put("/api/members/:id", authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;

@@ -19,8 +19,12 @@ import {
   RefreshCw,
   Check,
   Menu,
+  LogOut,
+  LogIn,
+  User,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
+import { useAuth } from '../context/AuthContext';
 import { formatHours, formatRelativeTime } from '../utils/agileHelpers';
 
 export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) => {
@@ -53,6 +57,8 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
     refetchDbData,
     resetToDemoData,
   } = useAgile();
+
+  const { member: authMember, isAuthenticated, login, logout, isLoading: authLoading } = useAuth();
 
   const [isBoardDropdownOpen, setIsBoardDropdownOpen] = useState(false);
   const [isUserDropdownOpen, setIsUserDropdownOpen] = useState(false);
@@ -360,49 +366,61 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
           )}
         </div>
 
-        {/* Current User Switcher */}
-        <div className="relative">
+        {/* Current User: Login / Logout */}
+        {!isAuthenticated || !authMember ? (
           <button
-            onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
-            className="flex items-center gap-2 p-1 pl-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors"
+            onClick={() => {
+              window.location.href = '/login';
+            }}
+            className="flex items-center gap-2 p-1 pl-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors text-sm"
+            title="Entrar"
           >
-            <img
-              src={currentUser.avatar}
-              alt={currentUser.name}
-              className="w-6 h-6 rounded-full object-cover border border-slate-200"
-            />
-            <span className="text-xs font-medium text-slate-700 dark:text-slate-300 hidden lg:inline max-w-[100px] truncate">
-              {currentUser.name.split(' ')[0]}
-            </span>
-            <ChevronDown className="w-3 h-3 text-slate-400" />
+            <LogIn className="w-4 h-4" />
+            <span className="text-slate-700 dark:text-slate-300 hidden sm:inline">Entrar</span>
           </button>
+        ) : (
+          <div className="relative group">
+            <button
+              onClick={() => setIsUserDropdownOpen(!isUserDropdownOpen)}
+              className="flex items-center gap-2 p-1 pl-2 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800 transition-colors"
+            >
+              <img
+                src={authMember.avatar}
+                alt={authMember.name}
+                className="w-6 h-6 rounded-full object-cover border border-slate-200"
+              />
+              <span className="text-xs font-medium text-slate-700 dark:text-slate-300 hidden lg:inline max-w-[100px] truncate">
+                {authMember.name.split(' ')[0]}
+              </span>
+              <ChevronDown className="w-3 h-3 text-slate-400" />
+            </button>
 
-          {isUserDropdownOpen && (
-            <div className="fixed left-2 right-2 top-14 sm:absolute sm:left-auto sm:right-0 sm:top-auto mt-2 sm:w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-2 z-50">
-              <div className="px-3 py-1.5 text-[11px] font-semibold uppercase text-slate-400 tracking-wider">
-                Alternar Usuário Atual
+            {isUserDropdownOpen && (
+              <div className="fixed left-2 right-2 top-14 sm:absolute sm:left-auto sm:right-0 sm:top-auto mt-2 sm:w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-2 z-50">
+                <div className="px-3 py-1.5 text-[11px] font-semibold uppercase text-slate-400 tracking-wider">
+                  Conta: {authMember.name}
+                </div>
+                <div className="px-3 py-1 border-b border-slate-100 dark:border-slate-800">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">{authMember.email}</p>
+                  <p className="text-[10px] text-slate-400 truncate">{authMember.role} • {authMember.department}</p>
+                </div>
+                <div className="px-3 py-1">
+                  <button
+                    onClick={() => {
+                      logout();
+                      setIsUserDropdownOpen(false);
+                      window.location.href = '/login';
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-2 text-left text-sm text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded transition-colors"
+                  >
+                    <LogOut className="w-4 h-4" />
+                    Sair
+                  </button>
+                </div>
               </div>
-              {members.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => {
-                    setCurrentUserId(m.id);
-                    setIsUserDropdownOpen(false);
-                  }}
-                  className={`w-full px-3 py-2 text-left flex items-center gap-2.5 hover:bg-slate-50 dark:hover:bg-slate-800/60 transition-colors ${
-                    m.id === currentUser.id ? 'bg-indigo-50/50 dark:bg-indigo-950/30' : ''
-                  }`}
-                >
-                  <img src={m.avatar} alt={m.name} className="w-7 h-7 rounded-full object-cover" />
-                  <div className="truncate">
-                    <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">{m.name}</p>
-                    <p className="text-[10px] text-slate-400 truncate">{m.role}</p>
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
 
         {/* + Criar Tarefa CTA */}
         <button
