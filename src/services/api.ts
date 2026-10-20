@@ -61,13 +61,17 @@ export const api = {
   },
 
   async getInitialState(): Promise<InitialStateResponse> {
-    const res = await fetch('/api/initial-state');
+    const res = await fetch('/api/initial-state', { headers: getAuthHeaders() });
     if (!res.ok) throw new Error('Falha ao carregar estado inicial do banco de dados Neon');
     return res.json();
   },
 
   async resetDatabase(): Promise<{ success: boolean; message: string }> {
-    const res = await fetch('/api/reset-database', { method: 'POST' });
+    const res = await fetch('/api/reset-database', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ confirm: 'RESET' }),
+    });
     if (!res.ok) throw new Error('Falha ao reiniciar banco de dados');
     return res.json();
   },
@@ -169,7 +173,7 @@ export const api = {
   async createActivity(activity: ActivityItem): Promise<void> {
     await fetch('/api/activities', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(activity),
     });
   },
@@ -178,7 +182,7 @@ export const api = {
   async updateIntegration(platform: IntegrationPlatform, updates: Partial<IntegrationConfig>): Promise<IntegrationConfig> {
     const res = await fetch(`/api/integrations/${encodeURIComponent(platform)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(updates),
     });
     if (!res.ok) throw new Error('Falha ao atualizar integração no NeonDB');
@@ -189,7 +193,7 @@ export const api = {
   async createWebhookLog(log: WebhookLog): Promise<void> {
     await fetch('/api/webhooks', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(log),
     });
   },
@@ -198,7 +202,7 @@ export const api = {
   async updateEmailSettings(settings: Partial<EmailSettings>): Promise<void> {
     await fetch('/api/email/settings', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(settings),
     });
   },
@@ -206,7 +210,7 @@ export const api = {
   async createEmailNotification(notification: EmailNotification): Promise<void> {
     await fetch('/api/email/notifications', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify(notification),
     });
   },
@@ -214,18 +218,21 @@ export const api = {
   async markEmailAsRead(id: string): Promise<void> {
     await fetch(`/api/email/notifications/${encodeURIComponent(id)}/read`, {
       method: 'PUT',
+      headers: getAuthHeaders(),
     });
   },
 
   async markAllEmailsAsRead(): Promise<void> {
     await fetch('/api/email/notifications/read-all', {
       method: 'PUT',
+      headers: getAuthHeaders(),
     });
   },
 
   async clearEmailHistory(): Promise<void> {
     await fetch('/api/email/notifications', {
       method: 'DELETE',
+      headers: getAuthHeaders(),
     });
   },
 
@@ -241,7 +248,7 @@ export const api = {
           const imageBase64 = reader.result as string;
           const res = await fetch('/api/bucket/upload', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders(),
             body: JSON.stringify({
               memberId,
               filename: file.name,

@@ -3,9 +3,13 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const DATABASE_URL =
-  process.env.DATABASE_URL ||
-  'postgresql://neondb_owner:npg_oQ6B2eKPpTvJ@ep-little-sun-b6r9taiu-pooler.c-2.sa-east-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require';
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  throw new Error(
+    'DATABASE_URL não definida. Copie .env.example para .env e configure o banco (NeonDB).'
+  );
+}
 
 export const pool = new Pool({
   connectionString: DATABASE_URL,

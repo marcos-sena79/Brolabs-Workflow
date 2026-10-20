@@ -15,6 +15,20 @@ import {
   findMemberById,
   updateLastLogin,
 } from './src/server/auth';
+import {
+  validateBody,
+  loginSchema,
+  registerSchema,
+  resetDatabaseSchema,
+  appSettingSchema,
+  memberCreateSchema,
+  memberUpdateSchema,
+  boardCreateSchema,
+  boardUpdateSchema,
+  taskCreateSchema,
+  taskUpdateSchema,
+  emailSettingsSchema,
+} from './src/server/validation';
 
 dotenv.config();
 
@@ -54,14 +68,27 @@ if (isVercel) {
   });
 }
 
-// CORS headers
+// CORS: restringe a APP_URL em produção; em dev mantém aberto (Vite serve same-origin)
+const allowedOrigin = process.env.APP_URL || (isProduction ? null : '*');
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const origin = req.headers.origin;
+  if (allowedOrigin === '*' || (origin && origin === allowedOrigin)) {
+    res.header('Access-Control-Allow-Origin', allowedOrigin === '*' ? '*' : origin);
+  }
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Credentials', 'true');
   if (req.method === 'OPTIONS') {
     return res.sendStatus(200);
   }
+  next();
+});
+
+// Security headers básicos (sem dependência externa)
+app.use((req, res, next) => {
+  res.header('X-Content-Type-Options', 'nosniff');
+  res.header('X-Frame-Options', 'SAMEORIGIN');
+  res.header('Referrer-Policy', 'same-origin');
   next();
 });
 
@@ -239,7 +266,7 @@ app.get('/api/health', async (req, res) => {
 });
 
 // Full initial state for fast bootstrap
-app.get('/api/initial-state', async (req, res) => {
+app.get('/api/initial-state', authenticateToken, async (req, res) => {
   try {
     const [boardsRes, membersRes, tasksRes, activitiesRes, integrationsRes, webhooksRes, emailSettingsRes, emailNotificationsRes, appSettingsRes] =
       await Promise.all([
@@ -308,19 +335,27 @@ app.get('/api/initial-state', async (req, res) => {
   }
 });
 
-// Reset / Seed database
-app.post('/api/reset-database', async (req, res) => {
-  try {
-    await seedDatabase();
-    res.json({ success: true, message: 'Database reset and re-seeded successfully in NeonDB' });
-  } catch (error: any) {
-    console.error('Reset database failed:', error);
-    res.status(500).json({ error: error.message });
+// Reset / Seed database (destructivo: exige auth + confirmação explícita)
+app.post(
+  '/api/reset-database',
+  authenticateToken,
+  validateBody(resetDatabaseSchema),
+  async (req, res) => {
+    try {
+      if (isProduction) {
+        return res.status(403).json({ error: 'Reset do banco desabilitado em produção' });
+      }
+      await seedDatabase();
+      res.json({ success: true, message: 'Database reset and re-seeded successfully in NeonDB' });
+    } catch (error: any) {
+      console.error('Reset database failed:', error);
+      res.status(500).json({ error: error.message });
+    }
   }
-});
+);
 
 // App Settings update
-app.put('/api/app-settings/:key', authenticateToken, async (req, res) => {
+app.put('/api/app-settings/:key', authenticateToken, validateBody(appSettingSchema), async (req, res) => {
   try {
     const { key } = req.params;
     const { value } = req.body;
@@ -337,16 +372,10 @@ app.put('/api/app-settings/:key', authenticateToken, async (req, res) => {
 
 // --- AUTH ENDPOINTS --- //
 
-app.post('/api/auth/register', async (req, res) => {
+app.post('/api/auth/register', validateBody(registerSchema), async (req, res) => {
   try {
     const { name, email, password, role, department, weeklyCapacityHours } =
       req.body;
-
-    if (!email || !password || !name) {
-      return res.status(400).json({
-        error: 'Nome, e-mail e senha são obrigatórios',
-      });
-    }
 
     const existing = await findMemberByEmail(email);
     if (existing) {
@@ -390,13 +419,9 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', validateBody(loginSchema), async (req, res) => {
   try {
     const { email, password } = req.body;
-
-    if (!email || !password) {
-      return res.status(400).json({ error: 'E-mail e senha são obrigatórios' });
-    }
 
     const memberRow = await findMemberByEmail(email);
     if (!memberRow) {
@@ -454,7 +479,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 
 // --- TASKS ENDPOINTS --- //
 
-app.post('/api/tasks', authenticateToken, async (req, res) => {
+app.post('/api/tasks', authenticateToken, validateBody(taskCreateSchema), async (req, res) => {
   try {
     const t = req.body;
     await query(
@@ -500,7 +525,7 @@ app.post('/api/tasks', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/tasks/:id', authenticateToken, async (req, res) => {
+app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -567,7 +592,7 @@ app.delete('/api/tasks/:id', authenticateToken, async (req, res) => {
 
 // --- BOARDS ENDPOINTS --- //
 
-app.post('/api/boards', authenticateToken, async (req, res) => {
+app.post('/api/boards', authenticateToken, validateBody(boardCreateSchema), async (req, res) => {
   try {
     const b = req.body;
     await query(
@@ -593,7 +618,7 @@ app.post('/api/boards', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/boards/:id', authenticateToken, async (req, res) => {
+app.put('/api/boards/:id', authenticateToken, validateBody(boardUpdateSchema), async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -647,7 +672,7 @@ app.delete('/api/boards/:id', authenticateToken, async (req, res) => {
 
 // --- MEMBERS ENDPOINTS --- //
 
-app.post('/api/members', authenticateToken, async (req, res) => {
+app.post('/api/members', authenticateToken, validateBody(memberCreateSchema), async (req, res) => {
   try {
     const m = req.body;
     await query(
@@ -662,7 +687,7 @@ app.post('/api/members', authenticateToken, async (req, res) => {
   }
 });
 
-app.put('/api/members/:id', authenticateToken, async (req, res) => {
+app.put('/api/members/:id', authenticateToken, validateBody(memberUpdateSchema), async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -710,7 +735,7 @@ app.get('/api/bucket/avatars', (req, res) => {
 });
 
 // Upload image directly to the storage bucket
-app.post('/api/bucket/upload', async (req, res) => {
+app.post('/api/bucket/upload', authenticateToken, async (req, res) => {
   try {
     const { memberId, filename, imageBase64 } = req.body;
     if (!imageBase64) {
@@ -765,7 +790,7 @@ app.post('/api/bucket/upload', async (req, res) => {
 
 // --- ACTIVITY LOGS --- //
 
-app.post('/api/activities', async (req, res) => {
+app.post('/api/activities', authenticateToken, async (req, res) => {
   try {
     const a = req.body;
     await query(
@@ -782,7 +807,7 @@ app.post('/api/activities', async (req, res) => {
 
 // --- INTEGRATIONS --- //
 
-app.put('/api/integrations/:id', async (req, res) => {
+app.put('/api/integrations/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -823,7 +848,7 @@ app.put('/api/integrations/:id', async (req, res) => {
   }
 });
 
-app.post('/api/webhooks', async (req, res) => {
+app.post('/api/webhooks', authenticateToken, async (req, res) => {
   try {
     const w = req.body;
     await query(
@@ -840,7 +865,7 @@ app.post('/api/webhooks', async (req, res) => {
 
 // --- EMAIL SETTINGS & NOTIFICATIONS --- //
 
-app.put('/api/email/settings', async (req, res) => {
+app.put('/api/email/settings', authenticateToken, validateBody(emailSettingsSchema), async (req, res) => {
   try {
     const updates = req.body;
     await query(
@@ -869,7 +894,7 @@ app.put('/api/email/settings', async (req, res) => {
   }
 });
 
-app.post('/api/email/notifications', async (req, res) => {
+app.post('/api/email/notifications', authenticateToken, async (req, res) => {
   try {
     const e = req.body;
     await query(
@@ -901,7 +926,7 @@ app.post('/api/email/notifications', async (req, res) => {
   }
 });
 
-app.put('/api/email/notifications/:id/read', async (req, res) => {
+app.put('/api/email/notifications/:id/read', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
     await query('UPDATE email_notifications SET read = TRUE WHERE id = $1', [id]);
@@ -911,7 +936,7 @@ app.put('/api/email/notifications/:id/read', async (req, res) => {
   }
 });
 
-app.put('/api/email/notifications/read-all', async (req, res) => {
+app.put('/api/email/notifications/read-all', authenticateToken, async (req, res) => {
   try {
     await query('UPDATE email_notifications SET read = TRUE');
     res.json({ success: true });
@@ -920,7 +945,7 @@ app.put('/api/email/notifications/read-all', async (req, res) => {
   }
 });
 
-app.delete('/api/email/notifications', async (req, res) => {
+app.delete('/api/email/notifications', authenticateToken, async (req, res) => {
   try {
     await query('DELETE FROM email_notifications');
     res.json({ success: true });

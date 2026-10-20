@@ -10,7 +10,17 @@ declare global {
   }
 }
 
-const JWT_SECRET = process.env.JWT_SECRET || 'brolabs_workflow_secret_dev_2026';
+function requireEnv(name: string): string {
+  const value = process.env[name];
+  if (!value) {
+    throw new Error(
+      `${name} não definida. Copie .env.example para .env e configure.`
+    );
+  }
+  return value;
+}
+
+const JWT_SECRET = requireEnv('JWT_SECRET');
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 const SALT_ROUNDS = Number(process.env.BCRYPT_SALT_ROUNDS) || 12;
 
