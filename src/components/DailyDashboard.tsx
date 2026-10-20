@@ -15,7 +15,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate, formatRelativeTime, isOverdue } from '../utils/agileHelpers';
+import { formatHours, formatDate, formatRelativeTime, isOverdue, isTaskDone, getTodoColumnId } from '../utils/agileHelpers';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 
 export const DailyDashboard: React.FC = () => {
@@ -34,14 +34,14 @@ export const DailyDashboard: React.FC = () => {
   const todayStr = new Date().toISOString().split('T')[0];
 
   // Daily metrics
-  const doneTasks = boardTasks.filter((t) => t.statusId === 'col-done');
+  const doneTasks = boardTasks.filter((t) => isTaskDone(currentBoard, t.statusId));
   const inProgressTasks = boardTasks.filter((t) => t.statusId === 'col-inprogress');
-  const todoTasks = boardTasks.filter((t) => t.statusId === 'col-todo');
+  const todoTasks = boardTasks.filter((t) => t.statusId === getTodoColumnId(currentBoard));
   const reviewTasks = boardTasks.filter((t) => t.statusId === 'col-review');
 
   // Tasks in risk (overdue or logged > estimated)
   const atRiskTasks = boardTasks.filter((t) => {
-    const isDone = t.statusId === 'col-done';
+    const isDone = isTaskDone(currentBoard, t.statusId);
     const overdue = isOverdue(t.dueDate, isDone);
     const overrun = t.estimatedHours > 0 && t.loggedHours > t.estimatedHours;
     return (!isDone && overdue) || overrun;

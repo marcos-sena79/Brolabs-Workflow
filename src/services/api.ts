@@ -146,6 +146,106 @@ export const api = {
     if (!res.ok) throw new Error('Falha ao deletar board no NeonDB');
   },
 
+  // Board columns (item 1.1 — lock otimista via version)
+  async createColumn(
+    boardId: string,
+    data: { title: string; accentColor?: string; wipLimit?: number | null; isDone?: boolean; version: number }
+  ): Promise<{ columns: Board['columns']; version: number }> {
+    const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/columns`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Falha ao criar coluna');
+    return res.json();
+  },
+
+  async updateColumn(
+    boardId: string,
+    columnId: string,
+    data: { title?: string; accentColor?: string; wipLimit?: number | null; isDone?: boolean; version: number }
+  ): Promise<{ columns: Board['columns']; version: number }> {
+    const res = await fetch(
+      `/api/boards/${encodeURIComponent(boardId)}/columns/${encodeURIComponent(columnId)}`,
+      {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data),
+      }
+    );
+    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Falha ao atualizar coluna');
+    return res.json();
+  },
+
+  async reorderColumns(
+    boardId: string,
+    order: string[],
+    version: number
+  ): Promise<{ columns: Board['columns']; version: number }> {
+    const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/columns/reorder`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ order, version }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Falha ao reordenar colunas');
+    return res.json();
+  },
+
+  async deleteColumn(
+    boardId: string,
+    columnId: string,
+    version: number,
+    reassignTo?: string
+  ): Promise<{ columns: Board['columns']; version: number }> {
+    const params = new URLSearchParams({ version: String(version) });
+    if (reassignTo) params.set('reassignTo', reassignTo);
+    const res = await fetch(
+      `/api/boards/${encodeURIComponent(boardId)}/columns/${encodeURIComponent(columnId)}?${params}`,
+      { method: 'DELETE', headers: getAuthHeaders() }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao remover coluna');
+    }
+    return res.json();
+  },
+
+  // Task archive (item 1.5)
+  async archiveTask(id: string, force = false): Promise<{ task: Task }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/archive`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ force }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw Object.assign(new Error(err?.error || 'Falha ao arquivar tarefa'), {
+        blockingTaskIds: err?.blockingTaskIds,
+        status: res.status,
+      });
+    }
+    return res.json();
+  },
+
+  async unarchiveTask(id: string): Promise<{ task: Task }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/unarchive`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao restaurar tarefa');
+    return res.json();
+  },
+
+  async getArchivedTasks(boardId: string): Promise<Task[]> {
+    const res = await fetch(
+      `/api/boards/${encodeURIComponent(boardId)}/tasks?archived=true`,
+      { headers: getAuthHeaders() }
+    );
+    if (!res.ok) throw new Error('Falha ao carregar tarefas arquivadas');
+    const data = await res.json();
+    return data.tasks || [];
+  },
+
   // Members
   async createMember(member: Member): Promise<Member> {
     const res = await fetch('/api/members', {

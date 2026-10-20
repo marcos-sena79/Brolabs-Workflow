@@ -1,4 +1,19 @@
-import { IssueType, Priority } from '../types';
+import { Board, IssueType, Priority } from '../types';
+
+/** Id da coluna de conclusão do quadro (fallback 'col-done' para dados legados). */
+export const getDoneColumnId = (board: Board): string =>
+  board.columns.find((c) => c.isDone)?.id ?? 'col-done';
+
+/** Verifica se um statusId representa "concluído" no quadro dado. */
+export const isTaskDone = (board: Board, statusId: string): boolean => {
+  if (statusId === getDoneColumnId(board)) return true;
+  const col = board.columns.find((c) => c.id === statusId);
+  return col?.title.toLowerCase().includes('concluíd') ?? false;
+};
+
+/** Id da coluna padrão de "A Fazer" (segunda coluna, fallback 'col-todo'). */
+export const getTodoColumnId = (board: Board): string =>
+  board.columns[1]?.id ?? board.columns[0]?.id ?? 'col-todo';
 
 export const formatHours = (hours: number): string => {
   if (hours === 0) return '0h';

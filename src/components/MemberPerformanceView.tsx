@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { Member } from '../types';
-import { formatHours, formatDate } from '../utils/agileHelpers';
+import { formatHours, formatDate, isTaskDone } from '../utils/agileHelpers';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 import { api } from '../services/api';
 
@@ -62,7 +62,7 @@ export const MemberPerformanceView: React.FC = () => {
   // Compute metrics for every member
   const memberStats = members.map((member) => {
     const memberTasks = boardTasks.filter((t) => t.assigneeId === member.id);
-    const doneTasks = memberTasks.filter((t) => t.statusId === 'col-done');
+    const doneTasks = memberTasks.filter((t) => isTaskDone(currentBoard, t.statusId));
     const inProgressTasks = memberTasks.filter((t) => t.statusId === 'col-inprogress');
 
     const estimatedHours = memberTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);

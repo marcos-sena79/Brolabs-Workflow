@@ -12,11 +12,12 @@ import {
   Ban,
   Link2,
   CheckCircle2,
+  Archive,
 } from 'lucide-react';
 import { Task } from '../types';
 import { useAgile } from '../context/AgileContext';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
-import { formatHours, formatDate, isOverdue } from '../utils/agileHelpers';
+import { formatHours, formatDate, isOverdue, isTaskDone } from '../utils/agileHelpers';
 
 interface TaskCardProps {
   task: Task;
@@ -32,6 +33,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
     activeTimer,
     startTimer,
     pauseTimer,
+    archiveTask,
   } = useAgile();
 
   const assignee = members.find((m) => m.id === task.assigneeId);
@@ -56,11 +58,11 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
       const target = tasks.find((t) => t.id === d.targetTaskId);
       return { link: d, task: target };
     })
-    .filter((item) => item.task && item.task.statusId !== 'col-done');
+    .filter((item) => item.task && !isTaskDone(currentBoard, item.task.statusId));
   const isBlocked = unresolvedBlockers.length > 0;
   const blocksOthers = dependencies.filter((d) => d.type === 'blocks');
 
-  const isCurrentDone = task.statusId === 'col-done';
+  const isCurrentDone = isTaskDone(currentBoard, task.statusId);
   const taskOverdue = isOverdue(task.dueDate, isCurrentDone);
 
   // Active timer on this specific task
@@ -95,6 +97,13 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
       }
     } else {
       startTimer(task.id);
+    }
+  };
+
+  const handleArchiveClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (confirm(`Arquivar a tarefa ${task.key}? Ela sairá do quadro ativa.`)) {
+      archiveTask(task.id).catch(() => {});
     }
   };
 
@@ -148,6 +157,15 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
             ) : (
               <Play className="w-3 h-3" />
             )}
+          </button>
+
+          {/* Quick Archive Button */}
+          <button
+            onClick={handleArchiveClick}
+            title="Arquivar tarefa"
+            className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-opacity"
+          >
+            <Archive className="w-3 h-3" />
           </button>
 
           <PriorityIcon priority={task.priority} className="w-3.5 h-3.5" />

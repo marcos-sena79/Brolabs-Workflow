@@ -28,6 +28,9 @@ import {
   taskCreateSchema,
   taskUpdateSchema,
   emailSettingsSchema,
+  columnCreateSchema,
+  columnUpdateSchema,
+  columnReorderSchema,
 } from './src/server/validation';
 
 dotenv.config();
@@ -131,6 +134,7 @@ function mapDbBoard(row: any) {
     sprintEndDate: row.sprint_end_date || '',
     columns: safeJson(row.columns, []),
     epics: safeJson(row.epics, []),
+    version: parseInt(row.version, 10) || 1,
   };
 }
 
@@ -171,6 +175,8 @@ function mapDbTask(row: any) {
     comments: safeJson(row.comments, []),
     tags: safeJson(row.tags, []),
     dependencies: safeJson(row.dependencies, []),
+    archivedAt: row.archived_at || null,
+    archivedBy: row.archived_by || null,
   };
 }
 
@@ -272,7 +278,7 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
       await Promise.all([
         query('SELECT * FROM boards ORDER BY created_at ASC'),
         query('SELECT * FROM members ORDER BY name ASC'),
-        query('SELECT * FROM tasks ORDER BY created_at DESC'),
+        query('SELECT * FROM tasks WHERE archived_at IS NULL ORDER BY created_at DESC'),
         query('SELECT * FROM activity_logs ORDER BY timestamp DESC LIMIT 100'),
         query('SELECT * FROM integrations ORDER BY id ASC'),
         query('SELECT * FROM webhook_logs ORDER BY timestamp DESC LIMIT 50'),
@@ -590,6 +596,140 @@ app.delete('/api/tasks/:id', authenticateToken, async (req, res) => {
   }
 });
 
+// --- TASK ARCHIVE (item 1.5) --- //
+
+app.post('/api/tasks/:id/archive', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const force = Boolean(req.body?.force);
+
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [id]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    const task = mapDbTask(taskRes.rows[0]);
+    if (task.archivedAt) {
+      return res.json({ success: true, task });
+    }
+
+    const boardRes = await query('SELECT * FROM boards WHERE id = $1', [task.boardId]);
+    const board = boardRes.rows.length > 0 ? mapDbBoard(boardRes.rows[0]) : null;
+    const doneColId = board?.columns?.find((c: any) => c.isDone)?.id ?? 'col-done';
+
+    const boardTasksRes = await query(
+      'SELECT * FROM tasks WHERE board_id = $1 AND archived_at IS NULL',
+      [task.boardId]
+    );
+    const blockingTaskIds = boardTasksRes.rows
+      .map((r: any) => mapDbTask(r))
+      .filter(
+        (t: any) =>
+          t.id !== task.id &&
+          t.statusId !== doneColId &&
+          (t.dependencies || []).some(
+            (d: any) => d.type === 'is_blocked_by' && d.targetTaskId === task.id
+          )
+      )
+      .map((t: any) => t.id);
+
+    if (blockingTaskIds.length > 0 && !force) {
+      return res.status(409).json({
+        error: 'Esta tarefa bloqueia outras tarefas ativas. Use force para arquivar removendo os bloqueios.',
+        blockingTaskIds,
+      });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (force && blockingTaskIds.length > 0) {
+        for (const blockerTaskId of blockingTaskIds) {
+          const row = boardTasksRes.rows.find((r: any) => r.id === blockerTaskId);
+          const deps = safeJson(row?.dependencies, []).filter(
+            (d: any) => !(d.type === 'is_blocked_by' && d.targetTaskId === task.id)
+          );
+          await client.query('UPDATE tasks SET dependencies = $1 WHERE id = $2', [
+            JSON.stringify(deps),
+            blockerTaskId,
+          ]);
+        }
+        const taskDeps = safeJson(taskRes.rows[0].dependencies, []).filter(
+          (d: any) =>
+            !(
+              d.type === 'blocks' &&
+              blockingTaskIds.some((bid: string) => bid === d.targetTaskId)
+            )
+        );
+        await client.query(
+          'UPDATE tasks SET archived_at = NOW(), archived_by = $1, dependencies = $2, updated_at = NOW() WHERE id = $3',
+          [req.memberId, JSON.stringify(taskDeps), id]
+        );
+      } else {
+        await client.query(
+          'UPDATE tasks SET archived_at = NOW(), archived_by = $1, updated_at = NOW() WHERE id = $2',
+          [req.memberId, id]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    const updated = await query('SELECT * FROM tasks WHERE id = $1', [id]);
+    res.json({ success: true, task: mapDbTask(updated.rows[0]) });
+  } catch (error: any) {
+    console.error('Error archiving task:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/tasks/:id/unarchive', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [id]);
+    if (taskRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    const task = mapDbTask(taskRes.rows[0]);
+    if (!task.archivedAt) {
+      return res.json({ success: true, task });
+    }
+
+    const boardRes = await query('SELECT * FROM boards WHERE id = $1', [task.boardId]);
+    const board = boardRes.rows.length > 0 ? mapDbBoard(boardRes.rows[0]) : null;
+    const columnExists = board?.columns?.some((c: any) => c.id === task.statusId);
+    const newStatusId = columnExists ? task.statusId : board?.columns?.[0]?.id ?? task.statusId;
+
+    await query(
+      'UPDATE tasks SET archived_at = NULL, archived_by = NULL, status_id = $1, updated_at = NOW() WHERE id = $2',
+      [newStatusId, id]
+    );
+    const updated = await query('SELECT * FROM tasks WHERE id = $1', [id]);
+    res.json({ success: true, task: mapDbTask(updated.rows[0]) });
+  } catch (error: any) {
+    console.error('Error unarchiving task:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/boards/:id/tasks', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const archivedOnly = req.query.archived === 'true';
+    const condition = archivedOnly ? 'archived_at IS NOT NULL' : 'archived_at IS NULL';
+    const tasksRes = await query(
+      `SELECT * FROM tasks WHERE board_id = $1 AND ${condition} ORDER BY created_at DESC`,
+      [id]
+    );
+    res.json({ tasks: tasksRes.rows.map(mapDbTask) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // --- BOARDS ENDPOINTS --- //
 
 app.post('/api/boards', authenticateToken, validateBody(boardCreateSchema), async (req, res) => {
@@ -666,6 +806,262 @@ app.delete('/api/boards/:id', authenticateToken, async (req, res) => {
     res.json({ success: true });
   } catch (error: any) {
     console.error('Error deleting board:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- BOARD COLUMNS (item 1.1, lock otimista via boards.version) --- //
+
+async function updateBoardColumnsWithLock(
+  boardId: string,
+  newColumns: any[],
+  expectedVersion: number
+): Promise<
+  | { ok: true; columns: any[]; version: number }
+  | { ok: false; status: number; error: string }
+> {
+  const res = await query(
+    `UPDATE boards SET columns = $1, version = version + 1, updated_at = NOW()
+     WHERE id = $2 AND version = $3
+     RETURNING columns, version`,
+    [JSON.stringify(newColumns), boardId, expectedVersion]
+  );
+  if (res.rowCount === 0) {
+    const exists = await query('SELECT id FROM boards WHERE id = $1', [boardId]);
+    if (exists.rows.length === 0) {
+      return { ok: false, status: 404, error: 'Quadro não encontrado' };
+    }
+    return {
+      ok: false,
+      status: 409,
+      error: 'Quadro foi modificado por outro usuário. Recarregue e tente novamente.',
+    };
+  }
+  return {
+    ok: true,
+    columns: safeJson(res.rows[0].columns, []),
+    version: parseInt(res.rows[0].version, 10),
+  };
+}
+
+app.post(
+  '/api/boards/:id/columns',
+  authenticateToken,
+  validateBody(columnCreateSchema),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { title, accentColor, wipLimit, isDone, version } = req.body;
+
+      const boardRes = await query('SELECT * FROM boards WHERE id = $1', [id]);
+      if (boardRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Quadro não encontrado' });
+      }
+      const board = mapDbBoard(boardRes.rows[0]);
+      if (board.columns.length >= 30) {
+        return res.status(422).json({ error: 'Limite de 30 colunas por quadro atingido' });
+      }
+
+      const newColumn = {
+        id: `col-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        title,
+        order: board.columns.length > 0 ? Math.max(...board.columns.map((c: any) => c.order)) + 1 : 0,
+        accentColor: accentColor || '#64748b',
+        ...(wipLimit != null ? { wipLimit } : {}),
+        ...(isDone ? { isDone: true } : {}),
+      };
+      let columns = [...board.columns, newColumn];
+      if (isDone) {
+        columns = columns.map((c: any) => (c.id === newColumn.id ? c : { ...c, isDone: false }));
+      }
+
+      const result = await updateBoardColumnsWithLock(id, columns, version);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.error });
+      }
+      res.status(201).json({ success: true, columns: result.columns, version: result.version });
+    } catch (error: any) {
+      console.error('Error creating column:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.patch(
+  '/api/boards/:id/columns/:columnId',
+  authenticateToken,
+  validateBody(columnUpdateSchema),
+  async (req, res) => {
+    try {
+      const { id, columnId } = req.params;
+      const { title, accentColor, wipLimit, isDone, version } = req.body;
+
+      const boardRes = await query('SELECT * FROM boards WHERE id = $1', [id]);
+      if (boardRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Quadro não encontrado' });
+      }
+      const board = mapDbBoard(boardRes.rows[0]);
+      const idx = board.columns.findIndex((c: any) => c.id === columnId);
+      if (idx === -1) {
+        return res.status(404).json({ error: 'Coluna não encontrada' });
+      }
+
+      let columns = board.columns.map((c: any) => {
+        if (c.id !== columnId) return c;
+        const updated = { ...c };
+        if (title !== undefined) updated.title = title;
+        if (accentColor !== undefined) updated.accentColor = accentColor;
+        if (wipLimit !== undefined) {
+          if (wipLimit === null) delete updated.wipLimit;
+          else updated.wipLimit = wipLimit;
+        }
+        if (isDone === true) updated.isDone = true;
+        if (isDone === false) delete updated.isDone;
+        return updated;
+      });
+      if (isDone === true) {
+        columns = columns.map((c: any) => {
+          if (c.id === columnId) return { ...c, isDone: true };
+          const { isDone: _ignored, ...rest } = c;
+          return rest;
+        });
+      }
+
+      const result = await updateBoardColumnsWithLock(id, columns, version);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.error });
+      }
+      res.json({ success: true, columns: result.columns, version: result.version });
+    } catch (error: any) {
+      console.error('Error updating column:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.put(
+  '/api/boards/:id/columns/reorder',
+  authenticateToken,
+  validateBody(columnReorderSchema),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { order, version } = req.body;
+
+      const boardRes = await query('SELECT * FROM boards WHERE id = $1', [id]);
+      if (boardRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Quadro não encontrado' });
+      }
+      const board = mapDbBoard(boardRes.rows[0]);
+      const currentIds = board.columns.map((c: any) => c.id).sort();
+      const newIds = [...order].sort();
+      if (
+        currentIds.length !== newIds.length ||
+        currentIds.some((cid: string, i: number) => cid !== newIds[i])
+      ) {
+        return res.status(422).json({ error: 'A lista de ordenação não corresponde às colunas do quadro' });
+      }
+
+      const columns = order.map((colId: string, i: number) => {
+        const col = board.columns.find((c: any) => c.id === colId);
+        return { ...col, order: i };
+      });
+
+      const result = await updateBoardColumnsWithLock(id, columns, version);
+      if (!result.ok) {
+        return res.status(result.status).json({ error: result.error });
+      }
+      res.json({ success: true, columns: result.columns, version: result.version });
+    } catch (error: any) {
+      console.error('Error reordering columns:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.delete('/api/boards/:id/columns/:columnId', authenticateToken, async (req, res) => {
+  try {
+    const { id, columnId } = req.params;
+    const reassignTo = req.query.reassignTo as string | undefined;
+    const version = parseInt(req.query.version as string, 10);
+
+    if (!Number.isInteger(version) || version < 1) {
+      return res.status(400).json({ error: 'Parâmetro version é obrigatório' });
+    }
+
+    const boardRes = await query('SELECT * FROM boards WHERE id = $1', [id]);
+    if (boardRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Quadro não encontrado' });
+    }
+    const board = mapDbBoard(boardRes.rows[0]);
+    const col = board.columns.find((c: any) => c.id === columnId);
+    if (!col) {
+      return res.status(404).json({ error: 'Coluna não encontrada' });
+    }
+    if (board.columns.length <= 1) {
+      return res.status(409).json({ error: 'Não é possível remover a última coluna do quadro' });
+    }
+
+    const countRes = await query(
+      'SELECT COUNT(*)::int AS count FROM tasks WHERE board_id = $1 AND status_id = $2',
+      [id, columnId]
+    );
+    const taskCount = countRes.rows[0].count;
+
+    if (taskCount > 0 && !reassignTo) {
+      return res
+        .status(409)
+        .json({ error: `A coluna possui ${taskCount} tarefa(s). Informe reassignTo para movê-las.`, taskCount });
+    }
+    if (reassignTo) {
+      const target = board.columns.find((c: any) => c.id === reassignTo);
+      if (!target || reassignTo === columnId) {
+        return res.status(422).json({ error: 'Coluna de destino inválida' });
+      }
+    }
+
+    let columns = board.columns.filter((c: any) => c.id !== columnId);
+    if (reassignTo) {
+      columns = columns.map((c: any) => (c.id === reassignTo ? { ...c, order: col.order } : c));
+      columns.sort((a: any, b: any) => a.order - b.order).map((c: any, i: number) => ({ ...c, order: i }));
+    } else {
+      columns = columns.map((c: any, i: number) => ({ ...c, order: i }));
+    }
+    if (col.isDone) {
+      const newDoneId = reassignTo || columns[columns.length - 1]?.id;
+      columns = columns.map((c: any) => (c.id === newDoneId ? { ...c, isDone: true } : c));
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      if (reassignTo && taskCount > 0) {
+        await client.query(
+          'UPDATE tasks SET status_id = $1, updated_at = NOW() WHERE board_id = $2 AND status_id = $3',
+          [reassignTo, id, columnId]
+        );
+      }
+      const upd = await client.query(
+        `UPDATE boards SET columns = $1, version = version + 1, updated_at = NOW()
+         WHERE id = $2 AND version = $3 RETURNING version`,
+        [JSON.stringify(columns), id, version]
+      );
+      if (upd.rowCount === 0) {
+        await client.query('ROLLBACK');
+        return res
+          .status(409)
+          .json({ error: 'Quadro foi modificado por outro usuário. Recarregue e tente novamente.' });
+      }
+      await client.query('COMMIT');
+      res.json({ success: true, columns, version: parseInt(upd.rows[0].version, 10) });
+    } catch (err: any) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+  } catch (error: any) {
+    console.error('Error deleting column:', error);
     res.status(500).json({ error: error.message });
   }
 });

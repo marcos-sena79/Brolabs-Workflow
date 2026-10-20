@@ -27,6 +27,7 @@ import {
   ShieldAlert,
   CheckCircle2,
   ExternalLink,
+  Archive,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { IssueType, Priority, Task, DependencyType } from '../types';
@@ -37,6 +38,7 @@ import {
   formatRelativeTime,
   getPriorityLabel,
   getIssueTypeLabel,
+  isTaskDone,
 } from '../utils/agileHelpers';
 
 export const TaskModal: React.FC = () => {
@@ -62,6 +64,7 @@ export const TaskModal: React.FC = () => {
     activeTimer,
     startTimer,
     pauseTimer,
+    archiveTask,
   } = useAgile();
 
   const task = tasks.find((t) => t.id === selectedTaskModalId);
@@ -115,7 +118,7 @@ export const TaskModal: React.FC = () => {
     const target = tasks.find((t) => t.id === d.targetTaskId);
     const targetCol = currentBoard.columns.find((c) => c.id === target?.statusId);
     const targetAssignee = members.find((m) => m.id === target?.assigneeId);
-    const isResolved = target?.statusId === 'col-done';
+    const isResolved = target ? isTaskDone(currentBoard, target.statusId) : false;
     return { link: d, task: target, column: targetCol, assignee: targetAssignee, isResolved };
   });
   const activeBlockersCount = blockedByTasks.filter((b) => !b.isResolved).length;
@@ -125,7 +128,7 @@ export const TaskModal: React.FC = () => {
     const target = tasks.find((t) => t.id === d.targetTaskId);
     const targetCol = currentBoard.columns.find((c) => c.id === target?.statusId);
     const targetAssignee = members.find((m) => m.id === target?.assigneeId);
-    const isResolved = task.statusId === 'col-done';
+    const isResolved = isTaskDone(currentBoard, task.statusId);
     return { link: d, task: target, column: targetCol, assignee: targetAssignee, isResolved };
   });
 
@@ -529,7 +532,20 @@ export const TaskModal: React.FC = () => {
                               </button>
                             </div>
 
-                            {/* Delete button */}
+            {/* Archive button */}
+            <button
+              onClick={() => {
+                if (confirm(`Arquivar a tarefa ${task.key}? Ela sairá do quadro ativa.`)) {
+                  archiveTask(task.id).catch(() => {});
+                }
+              }}
+              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+              title="Arquivar tarefa"
+            >
+              <Archive className="w-4 h-4" />
+            </button>
+
+            {/* Delete button */}
                             <button
                               type="button"
                               onClick={(e) => {
@@ -843,7 +859,7 @@ export const TaskModal: React.FC = () => {
 
                           <div className="flex items-center gap-2 shrink-0">
                             <span className="text-[10px] text-slate-500 dark:text-slate-400">
-                              {task.statusId === 'col-done'
+                              {isTaskDone(currentBoard, task.statusId)
                                 ? 'Liberada para prosseguir'
                                 : 'Aguardando entrega desta tarefa'}
                             </span>

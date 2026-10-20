@@ -3,6 +3,7 @@ import { X, Plus, Sparkles } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { IssueType, Priority } from '../types';
 import { IssueTypeIcon } from './AgileIcons';
+import { getTodoColumnId } from '../utils/agileHelpers';
 
 export const CreateTaskModal: React.FC = () => {
   const {
@@ -21,7 +22,7 @@ export const CreateTaskModal: React.FC = () => {
   const [description, setDescription] = useState('');
   const [issueType, setIssueType] = useState<IssueType>('story');
   const [priority, setPriority] = useState<Priority>('medium');
-  const [statusId, setStatusId] = useState(currentBoard.columns[1]?.id || 'col-todo');
+  const [statusId, setStatusId] = useState(getTodoColumnId(currentBoard));
   const [assigneeId, setAssigneeId] = useState(currentUser.id);
   const [epicId, setEpicId] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('8');

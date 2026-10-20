@@ -12,7 +12,7 @@ import {
   Search,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate } from '../utils/agileHelpers';
+import { formatHours, formatDate, isTaskDone } from '../utils/agileHelpers';
 import { IssueTypeIcon } from './AgileIcons';
 
 export const TimeManagementView: React.FC = () => {
@@ -62,7 +62,7 @@ export const TimeManagementView: React.FC = () => {
       return t.estimatedHours > 0 && t.loggedHours > t.estimatedHours;
     }
     if (filterType === 'completed') {
-      return t.statusId === 'col-done';
+      return isTaskDone(currentBoard, t.statusId);
     }
     if (filterType === 'in_progress') {
       return t.statusId === 'col-inprogress';

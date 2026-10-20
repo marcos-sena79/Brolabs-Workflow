@@ -15,6 +15,7 @@ import {
 import { useAgile } from '../context/AgileContext';
 import { TaskCard } from './TaskCard';
 import { Task } from '../types';
+import { isTaskDone } from '../utils/agileHelpers';
 
 export const KanbanBoard: React.FC = () => {
   const {
@@ -48,7 +49,7 @@ export const KanbanBoard: React.FC = () => {
     const blockers = (t.dependencies || []).filter((d) => d.type === 'is_blocked_by');
     return blockers.some((b) => {
       const blockerTask = tasks.find((x) => x.id === b.targetTaskId);
-      return blockerTask && blockerTask.statusId !== 'col-done';
+      return blockerTask && !isTaskDone(currentBoard, blockerTask.statusId);
     });
   }).length;
 

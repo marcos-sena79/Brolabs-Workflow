@@ -18,6 +18,7 @@ import {
 } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
+import { getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
 
 interface ActiveTimer {
   taskId: string;
@@ -55,6 +56,10 @@ interface AgileContextType {
   isCreateModalOpen: boolean;
   isShortcutsModalOpen: boolean;
   isCommandPaletteOpen: boolean;
+  isBoardSettingsOpen: boolean;
+  isTaskArchiveOpen: boolean;
+  archivedTasks: Task[];
+  isArchivedTasksLoading: boolean;
 
   // Authentication
   isAuthenticated: boolean;
@@ -75,6 +80,8 @@ interface AgileContextType {
   setIsCreateModalOpen: (open: boolean) => void;
   setIsShortcutsModalOpen: (open: boolean) => void;
   setIsCommandPaletteOpen: (open: boolean) => void;
+  setIsBoardSettingsOpen: (open: boolean) => void;
+  setIsTaskArchiveOpen: (open: boolean) => void;
 
   // Task Operations
   createTask: (taskData: {
@@ -93,6 +100,9 @@ interface AgileContextType {
   updateTask: (taskId: string, updates: Partial<Task>) => void;
   moveTask: (taskId: string, targetStatusId: string) => void;
   deleteTask: (taskId: string) => void;
+  archiveTask: (taskId: string, force?: boolean) => Promise<void>;
+  unarchiveTask: (taskId: string) => Promise<void>;
+  fetchArchivedTasks: () => Promise<void>;
 
   addSubtask: (taskId: string, title: string, estimatedHours?: number, assigneeId?: string) => void;
   toggleSubtask: (taskId: string, subtaskId: string) => void;
@@ -110,6 +120,18 @@ interface AgileContextType {
   // Board Operations
   createBoard: (board: { name: string; key: string; description: string; sprintName: string }) => void;
   updateBoard: (boardId: string, updates: Partial<Board>) => void;
+  addColumn: (data: {
+    title: string;
+    accentColor?: string;
+    wipLimit?: number | null;
+    isDone?: boolean;
+  }) => Promise<void>;
+  updateColumn: (
+    columnId: string,
+    data: { title?: string; accentColor?: string; wipLimit?: number | null; isDone?: boolean }
+  ) => Promise<void>;
+  reorderColumns: (order: string[]) => Promise<void>;
+  deleteColumn: (columnId: string, reassignTo?: string) => Promise<void>;
 
   // Members
   addMember: (member: Omit<Member, 'id'>) => void;
@@ -168,7 +190,7 @@ const DEFAULT_BOARD: Board = {
     { id: 'col-todo', title: 'A Fazer', order: 1, wipLimit: 8, accentColor: '#3b82f6' },
     { id: 'col-inprogress', title: 'Em Andamento', order: 2, wipLimit: 5, accentColor: '#eab308' },
     { id: 'col-review', title: 'Code Review / QA', order: 3, wipLimit: 4, accentColor: '#8b5cf6' },
-    { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981' },
+    { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981', isDone: true },
   ],
   epics: [],
 };
@@ -207,6 +229,10 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isBoardSettingsOpen, setIsBoardSettingsOpen] = useState(false);
+  const [isTaskArchiveOpen, setIsTaskArchiveOpen] = useState(false);
+  const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
+  const [isArchivedTasksLoading, setIsArchivedTasksLoading] = useState(false);
 
   const [filters, setFilters] = useState<FilterState>({
     searchQuery: '',
@@ -281,6 +307,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const setCurrentBoardId = (id: string) => {
     setCurrentBoardIdState(id);
+    setArchivedTasks([]);
     api.setAppSetting('current_board_id', id).catch(console.error);
   };
 
@@ -338,6 +365,14 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           setIsCommandPaletteOpen(false);
           return;
         }
+        if (isBoardSettingsOpen) {
+          setIsBoardSettingsOpen(false);
+          return;
+        }
+        if (isTaskArchiveOpen) {
+          setIsTaskArchiveOpen(false);
+          return;
+        }
         if (isShortcutsModalOpen) {
           setIsShortcutsModalOpen(false);
           return;
@@ -352,7 +387,15 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }
       }
 
-      if (isCreateModalOpen || selectedTaskModalId || isShortcutsModalOpen || isCommandPaletteOpen || isEmailDrawerOpen) {
+      if (
+        isCreateModalOpen ||
+        selectedTaskModalId ||
+        isShortcutsModalOpen ||
+        isCommandPaletteOpen ||
+        isEmailDrawerOpen ||
+        isBoardSettingsOpen ||
+        isTaskArchiveOpen
+      ) {
         return;
       }
 
@@ -478,7 +521,8 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           if (activeTimer.isRunning) pauseTimer();
           else resumeTimer();
         } else {
-          const taskCandidate = tasks.find((t) => t.boardId === currentBoardId && t.statusId !== 'col-done');
+          const board = boards.find((b) => b.id === currentBoardId) || boards[0] || DEFAULT_BOARD;
+          const taskCandidate = tasks.find((t) => t.boardId === currentBoardId && !isTaskDone(board, t.statusId));
           if (taskCandidate) {
             startTimer(taskCandidate.id);
           }
@@ -497,8 +541,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     selectedTaskModalId,
     isShortcutsModalOpen,
     isCommandPaletteOpen,
+    isBoardSettingsOpen,
+    isTaskArchiveOpen,
+    isEmailDrawerOpen,
     activeTimer,
     currentBoardId,
+    boards,
     tasks,
   ]);
 
@@ -553,7 +601,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         const hasActiveBlocker = (task.dependencies || []).some((dep) => {
           if (dep.type !== 'is_blocked_by') return false;
           const blocker = tasks.find((t) => t.id === dep.targetTaskId);
-          return blocker && blocker.statusId !== 'col-done';
+          return blocker && !isTaskDone(currentBoard, blocker.statusId);
         });
         if (!hasActiveBlocker) return false;
       }
@@ -722,7 +770,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       description: taskData.description || '',
       issueType: taskData.issueType || 'task',
       priority: taskData.priority || 'medium',
-      statusId: taskData.statusId || currentBoard.columns[1]?.id || 'col-todo',
+      statusId: taskData.statusId || getTodoColumnId(currentBoard),
       assigneeId: taskData.assigneeId || currentUser.id,
       reporterId: currentUser.id,
       epicId: taskData.epicId,
@@ -780,7 +828,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     const sourceCol = currentBoard.columns.find((c) => c.id === task.statusId);
     const targetCol = currentBoard.columns.find((c) => c.id === targetStatusId);
-    const isMovedToDone = targetStatusId === 'col-done' || targetCol?.title.toLowerCase().includes('concluíd');
+    const isMovedToDone = isTaskDone(currentBoard, targetStatusId);
 
     updateTask(taskId, { statusId: targetStatusId });
 
@@ -873,6 +921,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           dependencies: (t.dependencies || []).filter((d) => d.targetTaskId !== taskId),
         }))
     );
+    setArchivedTasks((prev) => prev.filter((t) => t.id !== taskId));
     api.deleteTask(taskId).catch(console.error);
     if (selectedTaskModalId === taskId) setSelectedTaskModalId(null);
     if (activeTimer?.taskId === taskId) setActiveTimer(null);
@@ -1083,7 +1132,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       details: `Vínculo de dependência adicionado: ${relDescription}`,
     });
 
-    if (type === 'is_blocked_by' && targetTask.statusId !== 'col-done') {
+    if (type === 'is_blocked_by' && !isTaskDone(currentBoard, targetTask.statusId)) {
       dispatchIntegrationEvent(
         'task_blocked',
         `⚠️ ${sourceTask.key} foi marcada como bloqueada por ${targetTask.key} (${targetTask.title})`,
@@ -1093,7 +1142,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           linkedBy: currentUser.name,
         }
       );
-    } else if (type === 'blocks' && sourceTask.statusId !== 'col-done') {
+    } else if (type === 'blocks' && !isTaskDone(currentBoard, sourceTask.statusId)) {
       dispatchIntegrationEvent(
         'task_blocked',
         `⚠️ ${targetTask.key} está bloqueada por ${sourceTask.key} (${sourceTask.title})`,
@@ -1327,7 +1376,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         { id: 'col-todo', title: 'A Fazer', order: 1, wipLimit: 10, accentColor: '#3b82f6' },
         { id: 'col-inprogress', title: 'Em Andamento', order: 2, wipLimit: 6, accentColor: '#eab308' },
         { id: 'col-review', title: 'Code Review / QA', order: 3, wipLimit: 4, accentColor: '#8b5cf6' },
-        { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981' },
+        { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981', isDone: true },
       ],
       epics: [],
     };
@@ -1348,6 +1397,130 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return b;
       })
     );
+  };
+
+  // Board columns (item 1.1) — lock otimista via boards.version
+  const applyColumnsResult = (boardId: string, columns: Board['columns'], version: number) => {
+    setBoards((prev) => prev.map((b) => (b.id === boardId ? { ...b, columns, version } : b)));
+  };
+
+  const addColumn = async (data: {
+    title: string;
+    accentColor?: string;
+    wipLimit?: number | null;
+    isDone?: boolean;
+  }) => {
+    try {
+      const res = await api.createColumn(currentBoard.id, { ...data, version: currentBoard.version ?? 1 });
+      applyColumnsResult(currentBoard.id, res.columns, res.version);
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || 'Falha ao criar coluna');
+      throw err;
+    }
+  };
+
+  const updateColumn = async (
+    columnId: string,
+    data: { title?: string; accentColor?: string; wipLimit?: number | null; isDone?: boolean }
+  ) => {
+    try {
+      const res = await api.updateColumn(currentBoard.id, columnId, {
+        ...data,
+        version: currentBoard.version ?? 1,
+      });
+      applyColumnsResult(currentBoard.id, res.columns, res.version);
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || 'Falha ao atualizar coluna');
+      throw err;
+    }
+  };
+
+  const reorderColumns = async (order: string[]) => {
+    try {
+      const res = await api.reorderColumns(currentBoard.id, order, currentBoard.version ?? 1);
+      applyColumnsResult(currentBoard.id, res.columns, res.version);
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || 'Falha ao reordenar colunas');
+      throw err;
+    }
+  };
+
+  const deleteColumn = async (columnId: string, reassignTo?: string) => {
+    try {
+      const res = await api.deleteColumn(currentBoard.id, columnId, currentBoard.version ?? 1, reassignTo);
+      applyColumnsResult(currentBoard.id, res.columns, res.version);
+    } catch (err: any) {
+      console.error(err);
+      alert(err?.message || 'Falha ao remover coluna');
+      throw err;
+    }
+  };
+
+  // Task archive (item 1.5)
+  const fetchArchivedTasks = async () => {
+    try {
+      setIsArchivedTasksLoading(true);
+      const list = await api.getArchivedTasks(currentBoard.id);
+      setArchivedTasks(list);
+    } catch (err) {
+      console.error('Falha ao carregar tarefas arquivadas:', err);
+    } finally {
+      setIsArchivedTasksLoading(false);
+    }
+  };
+
+  const archiveTask = async (taskId: string, force = false): Promise<void> => {
+    const task = tasks.find((t) => t.id === taskId);
+    try {
+      const res = await api.archiveTask(taskId, force);
+      setTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setArchivedTasks((prev) => [res.task, ...prev]);
+      if (selectedTaskModalId === taskId) setSelectedTaskModalId(null);
+      if (activeTimer?.taskId === taskId) setActiveTimer(null);
+      if (task) {
+        logActivity({
+          type: 'status_change',
+          taskId: task.id,
+          taskKey: task.key,
+          taskTitle: task.title,
+          memberId: currentUser.id,
+          memberName: currentUser.name,
+          details: `Arquivou a tarefa ${task.key}${force ? ' (forçado — bloqueios removidos)' : ''}`,
+        });
+      }
+    } catch (err: any) {
+      if (err?.status === 409 && err?.blockingTaskIds?.length > 0 && !force) {
+        const keys = err.blockingTaskIds
+          .map((id: string) => tasks.find((t) => t.id === id)?.key || id)
+          .join(', ');
+        if (
+          confirm(
+            `Esta tarefa bloqueia outras tarefas ativas (${keys}). Arquivar mesmo assim e remover os bloqueios?`
+          )
+        ) {
+          return archiveTask(taskId, true);
+        }
+        throw err;
+      }
+      console.error('Falha ao arquivar tarefa:', err);
+      alert(err?.message || 'Falha ao arquivar tarefa');
+      throw err;
+    }
+  };
+
+  const unarchiveTask = async (taskId: string): Promise<void> => {
+    try {
+      const res = await api.unarchiveTask(taskId);
+      setArchivedTasks((prev) => prev.filter((t) => t.id !== taskId));
+      setTasks((prev) => [res.task, ...prev]);
+    } catch (err: any) {
+      console.error('Falha ao restaurar tarefa:', err);
+      alert('Falha ao restaurar tarefa');
+      throw err;
+    }
   };
 
   // Members and persistence to NeonDB
@@ -1491,6 +1664,10 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         isCreateModalOpen,
         isShortcutsModalOpen,
         isCommandPaletteOpen,
+        isBoardSettingsOpen,
+        isTaskArchiveOpen,
+        archivedTasks,
+        isArchivedTasksLoading,
         isLoading: isLoading || authIsLoading,
         dbConnected,
         refetchDbData: fetchDbData,
@@ -1502,10 +1679,15 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         setIsCreateModalOpen,
         setIsShortcutsModalOpen,
         setIsCommandPaletteOpen,
+        setIsBoardSettingsOpen,
+        setIsTaskArchiveOpen,
         createTask,
         updateTask,
         moveTask,
         deleteTask,
+        archiveTask,
+        unarchiveTask,
+        fetchArchivedTasks,
         addSubtask,
         toggleSubtask,
         deleteSubtask,
@@ -1516,6 +1698,10 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         addComment,
         createBoard,
         updateBoard,
+        addColumn,
+        updateColumn,
+        reorderColumns,
+        deleteColumn,
         addMember,
         updateMember,
         updateIntegrationConfig,

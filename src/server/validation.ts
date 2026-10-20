@@ -104,6 +104,33 @@ export const boardCreateSchema = z.object({
 
 export const boardUpdateSchema = boardCreateSchema.partial().passthrough();
 
+// --- Board columns (item 1.1) ---
+
+export const columnCreateSchema = z.object({
+  title: z.string().trim().min(1).max(100),
+  accentColor: z.string().max(50).optional(),
+  wipLimit: z.number().int().min(1).max(999).nullable().optional(),
+  isDone: z.boolean().optional(),
+  version: z.number().int().min(1),
+});
+
+export const columnUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(100).optional(),
+    accentColor: z.string().max(50).optional(),
+    wipLimit: z.number().int().min(1).max(999).nullable().optional(),
+    isDone: z.boolean().optional(),
+    version: z.number().int().min(1),
+  })
+  .refine((v) => Object.keys(v).some((k) => k !== 'version'), {
+    message: 'Nada para atualizar',
+  });
+
+export const columnReorderSchema = z.object({
+  order: z.array(z.string().min(1).max(100)).min(1).max(30),
+  version: z.number().int().min(1),
+});
+
 // --- Tasks (merge server-side já saneia; valida só campos críticos no create) ---
 
 export const taskCreateSchema = z

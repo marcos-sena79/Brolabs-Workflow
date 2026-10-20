@@ -73,7 +73,7 @@ export const INITIAL_BOARDS: Board[] = [
       { id: 'col-todo', title: 'A Fazer', order: 1, wipLimit: 8, accentColor: '#3b82f6' },
       { id: 'col-inprogress', title: 'Em Andamento', order: 2, wipLimit: 5, accentColor: '#eab308' },
       { id: 'col-review', title: 'Code Review / QA', order: 3, wipLimit: 4, accentColor: '#8b5cf6' },
-      { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981' },
+      { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981', isDone: true },
     ],
     epics: [
       { id: 'epic-1', boardId: 'board-1', key: 'EP-1', name: 'Autenticação & MFA', color: '#6366f1', description: 'Segurança e credenciais' },
@@ -95,7 +95,7 @@ export const INITIAL_BOARDS: Board[] = [
       { id: 'col-todo', title: 'A Fazer', order: 1, accentColor: '#3b82f6' },
       { id: 'col-inprogress', title: 'Em Andamento', order: 2, accentColor: '#eab308' },
       { id: 'col-review', title: 'Code Review / QA', order: 3, accentColor: '#8b5cf6' },
-      { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981' },
+      { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981', isDone: true },
     ],
     epics: [
       { id: 'epic-m1', boardId: 'board-2', key: 'MOB-EP1', name: 'Autenticação Biométrica', color: '#ec4899', description: 'FaceID e Fingerprint' },

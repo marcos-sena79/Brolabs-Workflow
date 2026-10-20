@@ -22,6 +22,7 @@ import {
   LogOut,
   LogIn,
   User,
+  Settings,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { useAuth } from '../context/AuthContext';
@@ -56,6 +57,7 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
     isLoading,
     refetchDbData,
     resetToDemoData,
+    setIsBoardSettingsOpen,
   } = useAgile();
 
   const { member: authMember, isAuthenticated, login, logout, isLoading: authLoading } = useAuth();
@@ -185,6 +187,16 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
             </div>
           )}
         </div>
+
+        {/* Board settings (columns) trigger */}
+        <button
+          onClick={() => setIsBoardSettingsOpen(true)}
+          className="hidden sm:flex p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors shrink-0"
+          title="Configurar colunas do quadro"
+          aria-label="Configurar colunas do quadro"
+        >
+          <Settings className="w-4 h-4" />
+        </button>
       </div>
 
       {/* Center: Search Bar with Hotkey & Command Palette Launcher */}

@@ -12,7 +12,7 @@ import {
   Link2,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate } from '../utils/agileHelpers';
+import { formatHours, formatDate, getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 
 export const BacklogView: React.FC = () => {
@@ -126,7 +126,7 @@ export const BacklogView: React.FC = () => {
               const blockers = (task.dependencies || []).filter((d) => d.type === 'is_blocked_by');
               const isBlocked = blockers.some((b) => {
                 const target = tasks.find((t) => t.id === b.targetTaskId);
-                return target && target.statusId !== 'col-done';
+                return target && !isTaskDone(currentBoard, target.statusId);
               });
               const blocksCount = (task.dependencies || []).filter((d) => d.type === 'blocks').length;
 
@@ -226,7 +226,7 @@ export const BacklogView: React.FC = () => {
 
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3 sm:shrink-0" onClick={(e) => e.stopPropagation()}>
                     <button
-                      onClick={() => moveTask(task.id, 'col-todo')}
+                      onClick={() => moveTask(task.id, getTodoColumnId(currentBoard))}
                       className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 rounded transition-colors"
                     >
                       Puxar para Sprint

@@ -12,9 +12,11 @@ import {
   Flame,
   Keyboard,
   X,
+  Archive,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { ViewTab } from '../types';
+import { isTaskDone } from '../utils/agileHelpers';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -29,10 +31,11 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     boardTasks,
     integrations,
     setIsShortcutsModalOpen,
+    setIsTaskArchiveOpen,
   } = useAgile();
 
   const totalTasks = boardTasks.length;
-  const doneTasks = boardTasks.filter((t) => t.statusId === 'col-done').length;
+  const doneTasks = boardTasks.filter((t) => isTaskDone(currentBoard, t.statusId)).length;
   const progressPercent = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
   const totalEstimated = boardTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
@@ -168,6 +171,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
 
       {/* Bottom Section: Reset & Quick Status */}
       <div className="p-3 border-t border-slate-200 dark:border-slate-800 space-y-2">
+        <button
+          onClick={() => setIsTaskArchiveOpen(true)}
+          className="w-full flex items-center justify-between py-1.5 px-2 text-[11px] font-medium text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-200/50 dark:hover:bg-slate-800 rounded-md transition-colors"
+          title="Ver tarefas arquivadas"
+        >
+          <span className="flex items-center gap-2">
+            <Archive className="w-3.5 h-3.5 text-slate-400" />
+            Arquivo de Tarefas
+          </span>
+        </button>
+
         <div className="flex items-center justify-between text-[11px] text-slate-500 px-1">
           <span className="flex items-center gap-1.5">
             <span

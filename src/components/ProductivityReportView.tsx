@@ -15,7 +15,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate } from '../utils/agileHelpers';
+import { formatHours, formatDate, isTaskDone } from '../utils/agileHelpers';
 
 export const ProductivityReportView: React.FC = () => {
   const { currentBoard, boardTasks, members } = useAgile();
@@ -25,7 +25,7 @@ export const ProductivityReportView: React.FC = () => {
 
   // Metrics computation
   const totalTasks = boardTasks.length;
-  const doneTasks = boardTasks.filter((t) => t.statusId === 'col-done');
+  const doneTasks = boardTasks.filter((t) => isTaskDone(currentBoard, t.statusId));
   const inProgressTasks = boardTasks.filter((t) => t.statusId === 'col-inprogress');
   const reviewTasks = boardTasks.filter((t) => t.statusId === 'col-review');
 

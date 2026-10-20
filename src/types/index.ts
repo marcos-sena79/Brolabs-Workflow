@@ -74,6 +74,8 @@ export interface Task {
   comments: TaskComment[];
   tags: string[];
   dependencies?: TaskDependencyLink[];
+  archivedAt?: string | null;
+  archivedBy?: string | null;
 }
 
 export interface Column {
@@ -82,6 +84,7 @@ export interface Column {
   order: number;
   wipLimit?: number;
   accentColor: string;
+  isDone?: boolean;
 }
 
 export interface Epic {
@@ -104,6 +107,7 @@ export interface Board {
   sprintEndDate: string;
   columns: Column[];
   epics: Epic[];
+  version?: number;
 }
 
 export type ActivityActionType =

@@ -14,6 +14,8 @@ import { IntegrationsView } from './components/IntegrationsView';
 import { TaskModal } from './components/TaskModal';
 import { CreateTaskModal } from './components/CreateTaskModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
+import { BoardSettingsModal } from './components/BoardSettingsModal';
+import { TaskArchiveModal } from './components/TaskArchiveModal';
 import { CommandPalette } from './components/CommandPalette';
 import { EmailAlertToast } from './components/EmailAlertToast';
 import { EmailNotificationDrawer } from './components/EmailNotificationDrawer';
@@ -67,6 +69,8 @@ const AppContent: React.FC = () => {
       <TaskModal />
       <CreateTaskModal />
       <ShortcutsModal />
+      <BoardSettingsModal />
+      <TaskArchiveModal />
       <CommandPalette />
       <EmailAlertToast />
       <EmailNotificationDrawer />
