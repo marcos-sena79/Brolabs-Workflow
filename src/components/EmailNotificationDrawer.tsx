@@ -15,6 +15,8 @@ import {
   ChevronUp,
   Inbox,
   Filter,
+  AlertTriangle,
+  Clock,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { formatRelativeTime } from '../utils/agileHelpers';
@@ -30,6 +32,8 @@ export const EmailNotificationDrawer: React.FC = () => {
     triggerEmailAlert,
     markAllEmailsAsRead,
     clearEmailHistory,
+    deleteEmailNotification,
+    retryEmailNotification,
     currentUser,
     currentBoard,
     members,
@@ -39,6 +43,8 @@ export const EmailNotificationDrawer: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'outbox' | 'settings'>('outbox');
   const [expandedEmailId, setExpandedEmailId] = useState<string | null>(null);
   const [filterType, setFilterType] = useState<'all' | 'status_change' | 'mention'>('all');
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+  const [confirmClear, setConfirmClear] = useState(false);
 
   // Test email form state
   const [testEmailRecipient, setTestEmailRecipient] = useState('mssvenicius@gmail.com');
@@ -54,6 +60,28 @@ export const EmailNotificationDrawer: React.FC = () => {
   });
 
   const unreadCount = emailNotifications.filter((e) => !e.read).length;
+  const failedCount = emailNotifications.filter((e) => e.status === 'failed').length;
+
+  const handleRetry = async (id: string) => {
+    setRetryingId(id);
+    try {
+      await retryEmailNotification(id);
+    } catch {
+      // erro já tratado no context/api — mantém UI responsiva
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
+  const handleClearAll = () => {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      setTimeout(() => setConfirmClear(false), 4000);
+      return;
+    }
+    setConfirmClear(false);
+    clearEmailHistory();
+  };
 
   const handleSendTestEmail = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -135,6 +163,11 @@ export const EmailNotificationDrawer: React.FC = () => {
                 <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-bold">
                   {emailNotifications.length} enviados
                 </span>
+                {failedCount > 0 && (
+                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 font-bold">
+                    {failedCount} falharam
+                  </span>
+                )}
               </h3>
               <p className="text-[11px] text-slate-400">
                 Alertas automáticos de mudança de status e menções (@)
@@ -230,11 +263,16 @@ export const EmailNotificationDrawer: React.FC = () => {
 
                 {emailNotifications.length > 0 && (
                   <button
-                    onClick={clearEmailHistory}
-                    className="text-[11px] text-slate-400 hover:text-rose-500 flex items-center gap-1"
+                    onClick={handleClearAll}
+                    className={`text-[11px] flex items-center gap-1 ${
+                      confirmClear
+                        ? 'text-rose-600 font-bold animate-pulse'
+                        : 'text-slate-400 hover:text-rose-500'
+                    }`}
+                    title="Limpar todo o histórico (somente o seu)"
                   >
                     <Trash2 className="w-3 h-3" />
-                    Limpar
+                    {confirmClear ? 'Confirmar exclusão?' : 'Limpar'}
                   </button>
                 )}
               </div>
@@ -269,9 +307,21 @@ export const EmailNotificationDrawer: React.FC = () => {
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-1.5 text-slate-400 text-[10px]">
-                            <span>{formatRelativeTime(email.timestamp)}</span>
-                            {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                          <div className="flex items-center gap-1.5">
+                            <div className="flex items-center gap-1.5 text-slate-400 text-[10px]">
+                              <span>{formatRelativeTime(email.timestamp)}</span>
+                              {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                            </div>
+                            <button
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                deleteEmailNotification(email.id);
+                              }}
+                              className="p-1 rounded text-slate-300 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                              title="Remover notificação"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
                           </div>
                         </div>
 
@@ -283,10 +333,30 @@ export const EmailNotificationDrawer: React.FC = () => {
                           <span>
                             Para: <span className="font-mono text-slate-700 dark:text-slate-300">{email.recipientEmail}</span>
                           </span>
-                          <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            Disparado
-                          </span>
+                          {email.status === 'failed' ? (
+                            <button
+                              onClick={(ev) => {
+                                ev.stopPropagation();
+                                handleRetry(email.id);
+                              }}
+                              disabled={retryingId === email.id}
+                              className="text-[10px] font-semibold text-rose-600 dark:text-rose-400 flex items-center gap-1 hover:underline disabled:opacity-50"
+                              title={email.lastError || 'Falha no envio — tentar novamente'}
+                            >
+                              <AlertTriangle className="w-3 h-3" />
+                              {retryingId === email.id ? 'Reenviando…' : 'Falhou — Reenviar'}
+                            </button>
+                          ) : email.status === 'pending' ? (
+                            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-semibold flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              Pendente
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-emerald-600 font-semibold flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Enviado
+                            </span>
+                          )}
                         </div>
                       </div>
 

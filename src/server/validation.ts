@@ -165,6 +165,23 @@ export const emailSettingsSchema = z
   })
   .passthrough();
 
+// --- E-mail (item 3.1) ---
+
+export const emailTestSchema = z.object({
+  to: emailSchema,
+});
+
+// --- Preferências do membro (itens 3.3 / 5.4) ---
+
+export const memberPreferencesSchema = z
+  .object({
+    soundEnabled: z.boolean().optional(),
+    soundVolume: z.number().min(0).max(1).optional(),
+    soundEvent: z.enum(['none', 'soft', 'digital']).optional(),
+    theme: z.enum(['light', 'dark', 'system']).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nada para atualizar' });
+
 // --- Task attachments (item 2.1) ---
 
 export const attachmentUploadSchema = z.object({

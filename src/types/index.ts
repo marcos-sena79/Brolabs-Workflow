@@ -136,9 +136,18 @@ export interface EmailNotification {
   subject: string;
   contentPreview: string;
   htmlBody: string;
-  status: 'sent' | 'delivered';
+  status: 'sent' | 'delivered' | 'pending' | 'failed';
   timestamp: string;
   read: boolean;
+  attempts?: number;
+  lastError?: string | null;
+}
+
+export interface MemberPreferences {
+  soundEnabled?: boolean;
+  soundVolume?: number;
+  soundEvent?: 'none' | 'soft' | 'digital';
+  theme?: 'light' | 'dark' | 'system';
 }
 
 export interface EmailSettings {

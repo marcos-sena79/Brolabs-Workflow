@@ -36,6 +36,8 @@ import {
   attachmentConfirmSchema,
   boardMemberInviteSchema,
   boardMemberPatchSchema,
+  emailTestSchema,
+  memberPreferencesSchema,
 } from './src/server/validation';
 import {
   resolvePermissions,
@@ -57,6 +59,14 @@ import {
   SIGNED_UPLOAD_TTL_SEC,
   SIGNED_GET_TTL_SEC,
 } from './src/server/storage';
+import {
+  smtpConfigured,
+  smtpHost,
+  sendEmail,
+  processOutbox,
+  nextAttemptDate,
+} from './src/server/email/sender';
+import { renderTestEmail } from './src/server/email/templates';
 
 dotenv.config();
 
@@ -299,8 +309,10 @@ app.get('/api/health', async (req, res) => {
 // Full initial state for fast bootstrap
 app.get('/api/initial-state', authenticateToken, async (req, res) => {
   try {
-    const memberRes = await query('SELECT system_role FROM members WHERE id = $1', [req.memberId]);
+    const memberRes = await query('SELECT system_role, email, preferences FROM members WHERE id = $1', [req.memberId]);
     const isAdmin = memberRes.rows[0]?.system_role === 'admin';
+    const myEmail = memberRes.rows[0]?.email || '';
+    const myPreferences = safeJsonOrRaw(memberRes.rows[0]?.preferences, {});
 
     let boardsQuery;
     let tasksQuery;
@@ -332,7 +344,12 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
         query('SELECT * FROM integrations ORDER BY id ASC'),
         query('SELECT * FROM webhook_logs ORDER BY timestamp DESC LIMIT 50'),
         query('SELECT * FROM email_settings LIMIT 1'),
-        query('SELECT * FROM email_notifications ORDER BY timestamp DESC LIMIT 50'),
+        query(
+          `SELECT * FROM email_notifications
+           WHERE member_id = $1 OR LOWER(recipient_email) = LOWER($2)
+           ORDER BY timestamp DESC LIMIT 50`,
+          [req.memberId, myEmail]
+        ),
         query('SELECT * FROM app_settings'),
       ]);
 
@@ -396,6 +413,7 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
       currentBoardId,
       currentUserId,
       myPermissions,
+      preferences: myPreferences,
     });
   } catch (error: any) {
     console.error('Error fetching initial state:', error);
@@ -1409,14 +1427,50 @@ app.put('/api/email/settings', authenticateToken, validateBody(emailSettingsSche
   }
 });
 
+// Resolve o member_id dono de uma notificação (para escopo por usuário).
+async function resolveNotificationOwnerRow(id: string): Promise<any | null> {
+  const res = await query('SELECT * FROM email_notifications WHERE id = $1', [id]);
+  return res.rows.length > 0 ? res.rows[0] : null;
+}
+
+function notificationOwnedBy(row: any, memberId: string, memberEmail: string): boolean {
+  if (row.member_id && row.member_id === memberId) return true;
+  if (row.recipient_email && memberEmail && row.recipient_email.toLowerCase() === memberEmail.toLowerCase()) return true;
+  return false;
+}
+
 app.post('/api/email/notifications', authenticateToken, async (req, res) => {
   try {
     const e = req.body;
+    const meRes = await query('SELECT id, email FROM members WHERE id = $1', [req.memberId]);
+    const me = meRes.rows[0] || {};
+
+    // Deduplicação: mesmo task + trigger + destinatário dentro de 5 min → descarta
+    if (e.taskId && e.triggerType && e.recipientEmail) {
+      const dup = await query(
+        `SELECT 1 FROM email_notifications
+         WHERE task_id = $1 AND trigger_type = $2 AND LOWER(recipient_email) = LOWER($3)
+           AND created_at > NOW() - INTERVAL '5 minutes'`,
+        [e.taskId, e.triggerType, e.recipientEmail]
+      );
+      if (dup.rows.length > 0) {
+        return res.status(201).json({ success: true, emailNotification: e, duplicate: true });
+      }
+    }
+
+    // Ownership: se o destinatário é um membro, vincula a row a ele (escopo 3.2)
+    let ownerId: string | null = null;
+    if (e.recipientEmail) {
+      const ownerRes = await query('SELECT id FROM members WHERE LOWER(email) = LOWER($1)', [e.recipientEmail]);
+      ownerId = ownerRes.rows.length > 0 ? ownerRes.rows[0].id : null;
+    }
+
     await query(
       `INSERT INTO email_notifications (
         id, trigger_type, task_id, task_key, task_title, recipient_email,
-        recipient_name, sender_name, subject, content_preview, html_body, status, timestamp, read
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+        recipient_name, sender_name, subject, content_preview, html_body, status, timestamp, read,
+        member_id, next_attempt_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
       [
         e.id,
         e.triggerType,
@@ -1429,11 +1483,24 @@ app.post('/api/email/notifications', authenticateToken, async (req, res) => {
         e.subject || '',
         e.contentPreview || '',
         e.htmlBody || '',
-        e.status || 'sent',
+        'pending',
         e.timestamp,
         Boolean(e.read),
+        ownerId,
+        new Date(),
       ]
     );
+
+    // Flush lazy: envia até 5 pendentes antigas se SMTP ativo (padrão outbox — erro nunca derruba a request)
+    try {
+      const settingsRes = await query('SELECT enabled FROM email_settings LIMIT 1');
+      if (settingsRes.rows[0]?.enabled && smtpConfigured()) {
+        await processOutbox(5);
+      }
+    } catch (flushErr) {
+      console.error('Email outbox flush failed (non-fatal):', flushErr);
+    }
+
     res.status(201).json({ success: true, emailNotification: e });
   } catch (error: any) {
     console.error('Error creating email notification:', error);
@@ -1444,7 +1511,14 @@ app.post('/api/email/notifications', authenticateToken, async (req, res) => {
 app.put('/api/email/notifications/:id/read', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
-    await query('UPDATE email_notifications SET read = TRUE WHERE id = $1', [id]);
+    const meRes = await query('SELECT email, system_role FROM members WHERE id = $1', [req.memberId]);
+    const me = meRes.rows[0] || {};
+    const upd = await query(
+      `UPDATE email_notifications SET read = TRUE
+       WHERE id = $1 AND ($3 OR member_id = $2 OR LOWER(recipient_email) = LOWER($4))`,
+      [id, req.memberId, me.system_role === 'admin', me.email || '']
+    );
+    if (upd.rowCount === 0) return res.status(404).json({ error: 'Notificação não encontrada' });
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -1453,17 +1527,162 @@ app.put('/api/email/notifications/:id/read', authenticateToken, async (req, res)
 
 app.put('/api/email/notifications/read-all', authenticateToken, async (req, res) => {
   try {
-    await query('UPDATE email_notifications SET read = TRUE');
-    res.json({ success: true });
+    const meRes = await query('SELECT email FROM members WHERE id = $1', [req.memberId]);
+    const myEmail = meRes.rows[0]?.email || '';
+    const upd = await query(
+      `UPDATE email_notifications SET read = TRUE
+       WHERE member_id = $1 OR LOWER(recipient_email) = LOWER($2)`,
+      [req.memberId, myEmail]
+    );
+    res.json({ success: true, updated: upd.rowCount });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
 });
 
+// Limpar tudo (escopado ao usuário logado — item 3.2)
 app.delete('/api/email/notifications', authenticateToken, async (req, res) => {
   try {
-    await query('DELETE FROM email_notifications');
-    res.json({ success: true });
+    const meRes = await query('SELECT email FROM members WHERE id = $1', [req.memberId]);
+    const myEmail = meRes.rows[0]?.email || '';
+    const del = await query(
+      `DELETE FROM email_notifications
+       WHERE member_id = $1 OR LOWER(recipient_email) = LOWER($2)`,
+      [req.memberId, myEmail]
+    );
+    res.json({ success: true, deleted: del.rowCount });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Remover item individual (item 3.2) — dono ou admin
+app.delete('/api/email/notifications/:id', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const row = await resolveNotificationOwnerRow(id);
+    const meRes = await query('SELECT email, system_role FROM members WHERE id = $1', [req.memberId]);
+    const me = meRes.rows[0] || {};
+    const isAdmin = me.system_role === 'admin';
+    if (!row || (!isAdmin && !notificationOwnedBy(row, req.memberId!, me.email || ''))) {
+      return res.status(404).json({ error: 'Notificação não encontrada' });
+    }
+    await query('DELETE FROM email_notifications WHERE id = $1', [id]);
+    res.json({ success: true, deleted: 1 });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- E-mail real (item 3.1) ---
+
+app.get('/api/email/status', authenticateToken, async (req, res) => {
+  try {
+    res.json({
+      configured: smtpConfigured(),
+      provider: 'smtp',
+      host: smtpConfigured() ? smtpHost() : null,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/email/test', authenticateToken, requireAdmin(), validateBody(emailTestSchema), async (req, res) => {
+  try {
+    const { to } = req.body;
+    const settingsRes = await query('SELECT * FROM email_settings LIMIT 1');
+    const settings = settingsRes.rows[0];
+    const messageId = await sendEmail({
+      to,
+      subject: 'Teste de e-mail — Brolabs Workflow',
+      html: renderTestEmail(to),
+      fromEmail: settings?.sender_email || undefined,
+      fromName: settings?.sender_name || undefined,
+    });
+    res.json({ success: true, messageId });
+  } catch (error: any) {
+    console.error('Test email failed:', error);
+    res.status(502).json({ error: error.message });
+  }
+});
+
+app.post('/api/email/notifications/:id/retry', authenticateToken, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const force = req.query.force === 'true';
+    const row = await resolveNotificationOwnerRow(id);
+    const meRes = await query('SELECT email, system_role FROM members WHERE id = $1', [req.memberId]);
+    const me = meRes.rows[0] || {};
+    const isAdmin = me.system_role === 'admin';
+    if (!row || (!isAdmin && !notificationOwnedBy(row, req.memberId!, me.email || ''))) {
+      return res.status(404).json({ error: 'Notificação não encontrada' });
+    }
+    if (row.status === 'sent' && !force) {
+      return res.status(409).json({ error: 'Notificação já enviada. Use ?force=true para reenviar.' });
+    }
+    await query(
+      `UPDATE email_notifications SET status = 'pending', next_attempt_at = NOW() WHERE id = $1`,
+      [id]
+    );
+    // tenta enviar imediatamente (best-effort)
+    try {
+      const settingsRes = await query('SELECT enabled FROM email_settings LIMIT 1');
+      if (settingsRes.rows[0]?.enabled && smtpConfigured()) {
+        await processOutbox(1);
+      }
+    } catch (flushErr) {
+      console.error('Email retry flush failed (non-fatal):', flushErr);
+    }
+    res.status(202).json({ success: true, status: 'pending' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cron: consome o outbox de e-mails (Bearer $CRON_SECRET)
+app.get('/api/cron/process-emails', async (req, res) => {
+  try {
+    const secret = process.env.CRON_SECRET;
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : '';
+    if (!secret) return res.status(503).json({ error: 'CRON_SECRET não configurado' });
+    const a = Buffer.from(token);
+    const b = Buffer.from(secret);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: 'Token inválido' });
+    }
+    const result = await processOutbox(50);
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    console.error('Process emails cron failed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Preferências do membro (itens 3.3 / 5.4) ---
+
+app.get('/api/members/me/preferences', authenticateToken, async (req, res) => {
+  try {
+    const r = await query('SELECT preferences FROM members WHERE id = $1', [req.memberId]);
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Membro não encontrado' });
+    res.json({ preferences: safeJsonOrRaw(r.rows[0].preferences, {}) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.put('/api/members/me/preferences', authenticateToken, validateBody(memberPreferencesSchema), async (req, res) => {
+  try {
+    const currentRes = await query('SELECT preferences FROM members WHERE id = $1', [req.memberId]);
+    if (currentRes.rows.length === 0) return res.status(404).json({ error: 'Membro não encontrado' });
+    const current = safeJsonOrRaw(currentRes.rows[0].preferences, {});
+    const merged = { ...current, ...req.body };
+    await query('UPDATE members SET preferences = $1 WHERE id = $2', [
+      JSON.stringify(merged),
+      req.memberId,
+    ]);
+    res.json({ preferences: merged });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

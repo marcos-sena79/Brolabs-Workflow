@@ -18,10 +18,12 @@ import {
   TaskAttachment,
   BoardPermissions,
   PermissionFlag,
+  MemberPreferences,
 } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
 import { getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
+import { playSound, SoundEvent } from '../utils/sound';
 
 interface ActiveTimer {
   taskId: string;
@@ -172,8 +174,15 @@ interface AgileContextType {
   }) => void;
   updateEmailSettings: (settings: Partial<EmailSettings>) => void;
   markEmailAsRead: (id: string) => void;
-  markAllEmailsAsRead: () => void;
-  clearEmailHistory: () => void;
+  markAllEmailsAsRead: () => Promise<number> | void;
+  clearEmailHistory: () => Promise<number> | void;
+  deleteEmailNotification: (id: string) => void;
+  retryEmailNotification: (id: string) => Promise<void>;
+
+  // Preferências de som do membro (item 3.3)
+  soundPreferences: MemberPreferences;
+  updateSoundPreferences: (updates: MemberPreferences) => void;
+  playSoundEvent: (event: SoundEvent) => void;
 
   // Permissões por board (item 5.1)
   myPermissions: Record<string, BoardPermissions>;
@@ -288,6 +297,22 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [isEmailDrawerOpen, setIsEmailDrawerOpen] = useState(false);
   const [lastEmailAlertToast, setLastEmailAlertToast] = useState<EmailNotification | null>(null);
 
+  // Preferências de som do membro (item 3.3) — default local, hidratadas do servidor
+  const DEFAULT_SOUND_PREFS: MemberPreferences = {
+    soundEnabled: true,
+    soundVolume: 0.5,
+    soundEvent: 'soft',
+  };
+  const [soundPreferences, setSoundPreferences] = useState<MemberPreferences>(() => {
+    try {
+      const raw = localStorage.getItem('brolabs_prefs');
+      if (raw) return { ...DEFAULT_SOUND_PREFS, ...JSON.parse(raw) };
+    } catch {
+      // fallback silencioso
+    }
+    return DEFAULT_SOUND_PREFS;
+  });
+
   // Fetch all initial data from NeonDB backend
   const fetchDbData = useCallback(async () => {
     try {
@@ -308,6 +333,17 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         setEmailSettings(data.emailSettings);
       }
       setEmailNotifications(data.emailNotifications || []);
+
+      // Preferências de som: servidor é autoridade, localStorage é cache offline
+      if (data.preferences && Object.keys(data.preferences).length > 0) {
+        const merged = { ...DEFAULT_SOUND_PREFS, ...data.preferences };
+        setSoundPreferences(merged);
+        try {
+          localStorage.setItem('brolabs_prefs', JSON.stringify(merged));
+        } catch {
+          // sem storage — ok
+        }
+      }
 
       if (data.currentBoardId) {
         setCurrentBoardIdState(data.currentBoardId);
@@ -683,6 +719,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
     setEmailNotifications((prev) => [newEmail, ...prev.slice(0, 49)]);
     setLastEmailAlertToast(newEmail);
+    playSoundEvent('notification');
     api.createEmailNotification(newEmail).catch(console.error);
 
     setTimeout(() => {
@@ -724,6 +761,41 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setEmailNotifications([]);
     api.clearEmailHistory().catch(console.error);
   };
+
+  const deleteEmailNotification = (id: string) => {
+    setEmailNotifications((prev) => prev.filter((e) => e.id !== id));
+    api.deleteEmailNotification(id).catch(console.error);
+  };
+
+  const retryEmailNotification = async (id: string) => {
+    await api.retryEmailNotification(id);
+    setEmailNotifications((prev) =>
+      prev.map((e) => (e.id === id ? { ...e, status: 'pending' as const } : e))
+    );
+  };
+
+  const updateSoundPreferences = (updates: MemberPreferences) => {
+    setSoundPreferences((prev) => {
+      const next = { ...prev, ...updates };
+      try {
+        localStorage.setItem('brolabs_prefs', JSON.stringify(next));
+      } catch {
+        // sem storage — ok
+      }
+      return next;
+    });
+    api.updateMyPreferences(updates).catch(console.error);
+  };
+
+  const playSoundEvent = useCallback(
+    (event: SoundEvent) => {
+      if (soundPreferences.soundEnabled === false) return;
+      const vol = soundPreferences.soundVolume ?? 0.5;
+      const timbre = soundPreferences.soundEvent === 'digital' ? 'digital' : 'soft';
+      playSound(event, vol, timbre);
+    },
+    [soundPreferences]
+  );
 
   const clearEmailAlertToast = () => {
     setLastEmailAlertToast(null);
@@ -870,6 +942,17 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const isMovedToDone = isTaskDone(currentBoard, targetStatusId);
 
     updateTask(taskId, { statusId: targetStatusId });
+
+    // Som de desbloqueio (item 3.3): mover para coluna "done" destrava tarefas dependentes
+    if (isMovedToDone) {
+      const unblocked = tasks.some(
+        (t) =>
+          t.id !== taskId &&
+          !isTaskDone(currentBoard, t.statusId) &&
+          (t.dependencies || []).some((d) => d.type === 'is_blocked_by' && d.targetTaskId === taskId)
+      );
+      if (unblocked) playSoundEvent('unblocked');
+    }
 
     logActivity({
       type: 'status_change',
@@ -1692,6 +1775,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const stopTimer = () => {
     setActiveTimer(null);
+    playSoundEvent('timer');
   };
 
   const stopTimerAndLogWork = (comment?: string) => {
@@ -1704,6 +1788,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       comment || `Sessão cronometrada em tempo real (${Math.floor(activeTimer.elapsedSeconds / 60)} min)`
     );
     setActiveTimer(null);
+    playSoundEvent('timer');
   };
 
   // Reset / Seed directly in NeonDB database
@@ -1804,6 +1889,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         markEmailAsRead,
         markAllEmailsAsRead,
         clearEmailHistory,
+        deleteEmailNotification,
+        retryEmailNotification,
+        soundPreferences,
+        updateSoundPreferences,
+        playSoundEvent,
         myPermissions,
         can,
         attachmentsByTask,

@@ -13,6 +13,7 @@ import {
   BoardPermissions,
   BoardRole,
   PermissionFlag,
+  MemberPreferences,
 } from '../types';
 
 export interface InitialStateResponse {
@@ -27,6 +28,7 @@ export interface InitialStateResponse {
   currentBoardId: string;
   currentUserId: string;
   myPermissions?: Record<string, BoardPermissions>;
+  preferences?: MemberPreferences;
 }
 
 export interface HealthResponse {
@@ -473,18 +475,87 @@ export const api = {
     });
   },
 
-  async markAllEmailsAsRead(): Promise<void> {
-    await fetch('/api/email/notifications/read-all', {
+  async markAllEmailsAsRead(): Promise<number> {
+    const res = await fetch('/api/email/notifications/read-all', {
       method: 'PUT',
       headers: getAuthHeaders(),
     });
+    if (!res.ok) throw new Error('Falha ao marcar todas como lidas');
+    const data = await res.json();
+    return data.updated || 0;
   },
 
-  async clearEmailHistory(): Promise<void> {
-    await fetch('/api/email/notifications', {
+  async clearEmailHistory(): Promise<number> {
+    const res = await fetch('/api/email/notifications', {
       method: 'DELETE',
       headers: getAuthHeaders(),
     });
+    if (!res.ok) throw new Error('Falha ao limpar notificações');
+    const data = await res.json();
+    return data.deleted || 0;
+  },
+
+  async deleteEmailNotification(id: string): Promise<void> {
+    const res = await fetch(`/api/email/notifications/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    // 404 tratado como sucesso no client (remoção otimista idempotente)
+    if (!res.ok && res.status !== 404) throw new Error('Falha ao remover notificação');
+  },
+
+  // E-mail real (item 3.1)
+  async getEmailStatus(): Promise<{ configured: boolean; provider: string; host: string | null }> {
+    const res = await fetch('/api/email/status', { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Falha ao consultar status do e-mail');
+    return res.json();
+  },
+
+  async sendTestEmail(to: string): Promise<{ messageId: string }> {
+    const res = await fetch('/api/email/test', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ to }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao enviar e-mail de teste');
+    }
+    return res.json();
+  },
+
+  async retryEmailNotification(id: string, force = false): Promise<void> {
+    const params = force ? '?force=true' : '';
+    const res = await fetch(`/api/email/notifications/${encodeURIComponent(id)}/retry${params}`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao reenviar notificação');
+    }
+  },
+
+  // Preferências do membro (itens 3.3 / 5.4)
+  async getMyPreferences(): Promise<MemberPreferences> {
+    const res = await fetch('/api/members/me/preferences', { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Falha ao carregar preferências');
+    const data = await res.json();
+    return data.preferences || {};
+  },
+
+  async updateMyPreferences(updates: MemberPreferences): Promise<MemberPreferences> {
+    const res = await fetch('/api/members/me/preferences', {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(updates),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao salvar preferências');
+    }
+    const data = await res.json();
+    return data.preferences || {};
   },
 
   // Bucket Storage

@@ -23,6 +23,8 @@ import {
   LogIn,
   User,
   Settings,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { useAuth } from '../context/AuthContext';
@@ -59,6 +61,9 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
     resetToDemoData,
     setIsBoardSettingsOpen,
     can,
+    soundPreferences,
+    updateSoundPreferences,
+    playSoundEvent,
   } = useAgile();
 
   const { member: authMember, isAuthenticated, login, logout, isLoading: authLoading } = useAuth();
@@ -70,6 +75,7 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
   const [isDbModalOpen, setIsDbModalOpen] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncSuccess, setSyncSuccess] = useState(false);
+  const [isSoundMenuOpen, setIsSoundMenuOpen] = useState(false);
 
   // New Board Form State
   const [newBoardName, setNewBoardName] = useState('');
@@ -312,6 +318,96 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
         >
           <Keyboard className="w-4 h-4" />
         </button>
+
+        {/* Sound notifications toggle (item 3.3) */}
+        <div className="relative">
+          <button
+            onClick={() => setIsSoundMenuOpen(!isSoundMenuOpen)}
+            className={`p-2 rounded-md transition-colors ${
+              soundPreferences.soundEnabled === false
+                ? 'text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800'
+                : 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/40'
+            }`}
+            title={
+              soundPreferences.soundEnabled === false
+                ? 'Notificações sonoras desativadas (clique para ativar)'
+                : 'Notificações sonoras ativadas (clique para configurar)'
+            }
+            aria-label="Configurar notificações sonoras"
+          >
+            {soundPreferences.soundEnabled === false ? (
+              <VolumeX className="w-4 h-4" />
+            ) : (
+              <Volume2 className="w-4 h-4" />
+            )}
+          </button>
+
+          {isSoundMenuOpen && (
+            <div className="absolute right-0 mt-2 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg shadow-xl py-3 px-3 z-50">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-bold text-slate-800 dark:text-slate-100">Notificações sonoras</span>
+                <button
+                  onClick={() =>
+                    updateSoundPreferences({ soundEnabled: soundPreferences.soundEnabled === false })
+                  }
+                  className={`relative w-9 h-5 rounded-full transition-colors ${
+                    soundPreferences.soundEnabled === false
+                      ? 'bg-slate-300 dark:bg-slate-700'
+                      : 'bg-indigo-600'
+                  }`}
+                  role="switch"
+                  aria-checked={soundPreferences.soundEnabled !== false}
+                >
+                  <span
+                    className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${
+                      soundPreferences.soundEnabled === false ? 'left-0.5 translate-x-0' : 'left-4'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <label className="block text-[10px] font-semibold uppercase text-slate-400 tracking-wider mb-1">
+                Volume
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={Math.round((soundPreferences.soundVolume ?? 0.5) * 100)}
+                onChange={(e) =>
+                  updateSoundPreferences({ soundVolume: Number(e.target.value) / 100 })
+                }
+                className="w-full h-1.5 accent-indigo-600 cursor-pointer"
+              />
+
+              <label className="block text-[10px] font-semibold uppercase text-slate-400 tracking-wider mt-3 mb-1">
+                Timbre
+              </label>
+              <div className="flex gap-1.5">
+                {(['soft', 'digital'] as const).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => updateSoundPreferences({ soundEvent: t })}
+                    className={`flex-1 px-2 py-1.5 rounded text-[11px] font-semibold border transition-colors ${
+                      (soundPreferences.soundEvent || 'soft') === t
+                        ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
+                        : 'border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    {t === 'soft' ? 'Suave' : 'Digital'}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={() => playSoundEvent('notification')}
+                className="w-full mt-3 px-2 py-1.5 rounded text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/40 transition-colors"
+              >
+                ▶ Testar som
+              </button>
+            </div>
+          )}
+        </div>
 
         {/* Email Alerts Outbox & Settings Trigger */}
         <button
