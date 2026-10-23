@@ -308,3 +308,42 @@ export interface AiUsage {
   status: 'ok' | 'error' | 'rate_limited';
   createdAt: string;
 }
+
+// --- Board público/privado (item 1.2) ---
+
+export interface BoardShareInfo {
+  visibility: 'public' | 'private';
+  token: string | null;
+  url: string | null;
+  expiresAt: string | null;
+}
+
+export interface PublicTask {
+  id: string;
+  key: string;
+  title: string;
+  statusId: string;
+  priority: string;
+  issueType: string;
+  assigneeName: string | null;
+  dueDate: string;
+  storyPoints: number;
+  tags: string[];
+  subtasks: { title: string; completed: boolean }[];
+  commentsCount: number;
+}
+
+export interface PublicBoardData {
+  board: Board;
+  tasks: PublicTask[];
+}
+
+// --- Etiquetas globais (item 2.2) ---
+
+export interface TagDef {
+  id: string;
+  name: string;
+  color: string;
+  usageCount: number;
+  orphan?: boolean;
+}

@@ -35,6 +35,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
     pauseTimer,
     archiveTask,
     can,
+    colorForTag,
   } = useAgile();
 
   const assignee = members.find((m) => m.id === task.assigneeId);
@@ -195,6 +196,34 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
       <h4 className="text-xs font-semibold text-slate-900 dark:text-slate-100 line-clamp-2 leading-relaxed mb-2">
         {task.title}
       </h4>
+
+      {/* Tag Chips (item 2.2 — cor vem do catálogo global) */}
+      {task.tags?.length > 0 && (
+        <div className="flex flex-wrap gap-1 mb-2 -mt-1">
+          {task.tags.slice(0, 3).map((tag) => {
+            const color = colorForTag(tag);
+            return (
+              <span
+                key={tag}
+                className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full border truncate max-w-[90px]"
+                style={{
+                  borderColor: `${color}55`,
+                  backgroundColor: `${color}18`,
+                  color,
+                }}
+                title={tag}
+              >
+                {tag}
+              </span>
+            );
+          })}
+          {task.tags.length > 3 && (
+            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 dark:bg-slate-700/70 dark:text-slate-300">
+              +{task.tags.length - 3}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Dependency Badges */}
       {(isBlocked || blocksOthers.length > 0 || (blockers.length > 0 && !isBlocked)) && (

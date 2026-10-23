@@ -273,3 +273,32 @@ export const noteAiSchema = z.object({
 export const noteFromSprintSchema = z.object({
   boardId: idSchema,
 });
+
+// --- Board público/privado (item 1.2) ---
+
+export const shareCreateSchema = z.object({
+  expiresInDays: z.number().int().min(1).max(365).optional(),
+});
+
+// --- Etiquetas globais (item 2.2) ---
+
+const tagNameSchema = z
+  .string()
+  .transform((s) => s.trim())
+  .pipe(z.string().min(1).max(60));
+
+const tagColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Cor inválida (use #RRGGBB)');
+
+export const tagCreateSchema = z.object({
+  name: tagNameSchema,
+  color: tagColorSchema.optional(),
+});
+
+export const tagUpdateSchema = z
+  .object({
+    name: tagNameSchema.optional(),
+    color: tagColorSchema.optional(),
+  })
+  .refine((v) => v.name !== undefined || v.color !== undefined, {
+    message: 'Informe name ou color',
+  });

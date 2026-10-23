@@ -18,6 +18,9 @@ import {
   TodoSuggestion,
   Note,
   NoteAiAction,
+  BoardShareInfo,
+  PublicBoardData,
+  TagDef,
 } from '../types';
 
 export interface InitialStateResponse {
@@ -45,6 +48,10 @@ export interface HealthResponse {
   publicTables: number;
   totalTasks: number;
   totalBoards: number;
+  smtp: string;
+  storage: string;
+  ai: string;
+  migrations: string;
 }
 
 export interface AuthLoginResponse {
@@ -156,6 +163,84 @@ export const api = {
       headers: getAuthHeaders(),
     });
     if (!res.ok) throw new Error('Falha ao deletar board no NeonDB');
+  },
+
+  // Board público/privado (item 1.2)
+  async getBoardShare(boardId: string): Promise<BoardShareInfo> {
+    const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/share`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao carregar link público');
+    return res.json();
+  },
+
+  async createBoardShare(boardId: string, expiresInDays?: number): Promise<BoardShareInfo & { url: string }> {
+    const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/share`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(expiresInDays ? { expiresInDays } : {}),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Falha ao gerar link público');
+    return res.json();
+  },
+
+  async revokeBoardShare(boardId: string): Promise<{ visibility: 'private' }> {
+    const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/share`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao revogar link público');
+    return res.json();
+  },
+
+  async getPublicBoard(token: string): Promise<PublicBoardData> {
+    const res = await fetch(`/api/public/boards/${encodeURIComponent(token)}`);
+    if (!res.ok) throw new Error('NOT_FOUND');
+    return res.json();
+  },
+
+  // Etiquetas globais (item 2.2)
+  async getTags(): Promise<TagDef[]> {
+    const res = await fetch('/api/tags', { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Falha ao carregar etiquetas');
+    const data = await res.json();
+    return data.tags || [];
+  },
+
+  async createTag(input: { name: string; color?: string }): Promise<TagDef> {
+    const res = await fetch('/api/tags', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Falha ao criar etiqueta');
+    const data = await res.json();
+    return data.tag;
+  },
+
+  async updateTag(id: string, input: { name?: string; color?: string }): Promise<{ tag: TagDef; tasksUpdated: number }> {
+    const res = await fetch(`/api/tags/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(input),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error || 'Falha ao atualizar etiqueta');
+    return res.json();
+  },
+
+  async deleteTag(id: string, removeFromTasks = false): Promise<{ removedFromTasks: number }> {
+    const res = await fetch(
+      `/api/tags/${encodeURIComponent(id)}${removeFromTasks ? '?removeFromTasks=true' : ''}`,
+      { method: 'DELETE', headers: getAuthHeaders() }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({} as any));
+      const e: any = new Error(err?.error || 'Falha ao excluir etiqueta');
+      e.status = res.status;
+      e.usageCount = err?.usageCount;
+      throw e;
+    }
+    return res.json();
   },
 
   // Board columns (item 1.1 — lock otimista via version)

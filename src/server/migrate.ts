@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 import { pool, query } from './db';
 
 const MIGRATIONS_DIR = path.resolve(process.cwd(), 'migrations');
@@ -134,6 +135,14 @@ export async function migrateDown(steps = 1): Promise<string[]> {
   return reverted;
 }
 
+/** Resumo compacto para /api/health: 'up-to-date' ou 'pending:N'. */
+export async function migrationsSummary(): Promise<string> {
+  await ensureMigrationsTable();
+  const applied = await getApplied();
+  const pending = loadMigrations().filter((m) => !applied.has(m.version));
+  return pending.length === 0 ? 'up-to-date' : `pending:${pending.length}`;
+}
+
 export async function migrateStatus(): Promise<void> {
   await ensureMigrationsTable();
   const applied = await getApplied();
@@ -172,4 +181,9 @@ async function main() {
   }
 }
 
-main();
+// Executa a CLI apenas quando chamado diretamente (tsx src/server/migrate.ts),
+// nunca quando importado pelo server.ts (ex.: migrationsSummary p/ /api/health).
+const invokedPath = process.argv[1] ? path.resolve(process.argv[1]) : '';
+if (invokedPath === fileURLToPath(import.meta.url)) {
+  main();
+}

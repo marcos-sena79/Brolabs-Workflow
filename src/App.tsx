@@ -18,6 +18,7 @@ import { ShortcutsModal } from './components/ShortcutsModal';
 import { BoardSettingsModal } from './components/BoardSettingsModal';
 import { TaskArchiveModal } from './components/TaskArchiveModal';
 import { BoardAccessModal } from './components/BoardAccessModal';
+import { TagsManagerModal } from './components/TagsManagerModal';
 import { CommandPalette } from './components/CommandPalette';
 import { EmailAlertToast } from './components/EmailAlertToast';
 import { EmailNotificationDrawer } from './components/EmailNotificationDrawer';
@@ -26,6 +27,7 @@ import { RegisterPage } from './pages/RegisterPage';
 import { PrivateRoute } from './components/PrivateRoute';
 import { MyTodoView } from './components/MyTodoView';
 import { NotesView } from './components/NotesView';
+import { PublicBoardView } from './components/PublicBoardView';
 
 const AppContent: React.FC = () => {
   const { currentView } = useAgile();
@@ -80,6 +82,7 @@ const AppContent: React.FC = () => {
       <BoardSettingsModal />
       <TaskArchiveModal />
       <BoardAccessModal />
+      <TagsManagerModal />
       <CommandPalette />
       <EmailAlertToast />
       <EmailNotificationDrawer />
@@ -95,6 +98,8 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
+          {/* Quadro público (item 1.2) — sem autenticação, fora do PrivateRoute */}
+          <Route path="/q/:token" element={<PublicBoardView />} />
           <Route
             element={
               <PrivateRoute>

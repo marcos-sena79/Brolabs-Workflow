@@ -63,6 +63,8 @@ export const TaskModal: React.FC = () => {
     addComment,
     sendTestWebhook,
     activeTimer,
+    colorForTag,
+    tagCatalog,
     startTimer,
     pauseTimer,
     archiveTask,
@@ -1291,20 +1293,28 @@ export const TaskModal: React.FC = () => {
                   Marcadores (Tags)
                 </label>
                 <div className="flex flex-wrap gap-1.5 mb-2">
-                  {task.tags?.map((t) => (
-                    <span
-                      key={t}
-                      className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200"
-                    >
-                      {t}
-                      <button
-                        onClick={() => handleRemoveTag(t)}
-                        className="hover:text-rose-500 text-slate-400"
+                  {task.tags?.map((t) => {
+                    const color = colorForTag(t);
+                    return (
+                      <span
+                        key={t}
+                        className="inline-flex items-center gap-1 text-[11px] px-2 py-0.5 rounded-md border"
+                        style={{
+                          borderColor: `${color}55`,
+                          backgroundColor: `${color}18`,
+                          color,
+                        }}
                       >
-                        ×
-                      </button>
-                    </span>
-                  ))}
+                        {t}
+                        <button
+                          onClick={() => handleRemoveTag(t)}
+                          className="hover:opacity-70 opacity-60 font-bold"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    );
+                  })}
                 </div>
                 <input
                   type="text"
@@ -1314,6 +1324,31 @@ export const TaskModal: React.FC = () => {
                   onKeyDown={handleAddTag}
                   className="w-full text-xs px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
+                {(() => {
+                  const suggestions = tagCatalog
+                    .filter((s) => !s.orphan && !task.tags?.some((t) => t.toLowerCase() === s.name.toLowerCase()))
+                    .slice(0, 8);
+                  if (suggestions.length === 0) return null;
+                  return (
+                    <div className="flex flex-wrap gap-1 mt-1.5">
+                      {suggestions.map((s) => (
+                        <button
+                          key={s.id}
+                          onClick={() => updateTask(task.id, { tags: [...(task.tags || []), s.name] })}
+                          className="text-[10px] px-1.5 py-0.5 rounded-full border hover:opacity-75"
+                          style={{
+                            borderColor: `${s.color}55`,
+                            backgroundColor: `${s.color}14`,
+                            color: s.color,
+                          }}
+                          title={`Adicionar "${s.name}"`}
+                        >
+                          + {s.name}
+                        </button>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Communication Dispatch Button */}

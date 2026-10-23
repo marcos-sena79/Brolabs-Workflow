@@ -1,0 +1,23 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run test
+      - run: npm run build
+# Deploy: Vercel publica automaticamente ao push em main (integração nativa),
+# sem job de deploy próprio. Testes de integração com DB ficam fora do CI
+# (requerem DATABASE_URL_TEST — ver 3.5 no plano).

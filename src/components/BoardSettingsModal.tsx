@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { X, Plus, Trash2, ArrowUp, ArrowDown, CheckCircle2, Circle } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { X, Plus, Trash2, ArrowUp, ArrowDown, CheckCircle2, Circle, Globe, Link2, Copy, Check } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { Column } from '../types';
+import { api } from '../services/api';
+import { BoardShareInfo, Column } from '../types';
 
 const PRESET_COLORS = ['#64748b', '#3b82f6', '#eab308', '#8b5cf6', '#10b981', '#ef4444', '#ec4899', '#06b6d4'];
 
@@ -25,6 +26,27 @@ export const BoardSettingsModal: React.FC = () => {
   const [busy, setBusy] = useState(false);
   const [deletingColumnId, setDeletingColumnId] = useState<string | null>(null);
   const [reassignTarget, setReassignTarget] = useState('');
+  const [share, setShare] = useState<BoardShareInfo | null>(null);
+  const [shareBusy, setShareBusy] = useState(false);
+  const [shareError, setShareError] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!isBoardSettingsOpen || !currentBoard?.id) return;
+    let cancelled = false;
+    setShareError('');
+    api
+      .getBoardShare(currentBoard.id)
+      .then((s) => {
+        if (!cancelled) setShare(s);
+      })
+      .catch((err) => {
+        if (!cancelled) setShareError(err?.message || 'Falha ao carregar link público');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isBoardSettingsOpen, currentBoard?.id]);
 
   if (!isBoardSettingsOpen) return null;
 
@@ -91,6 +113,47 @@ export const BoardSettingsModal: React.FC = () => {
       setDeletingColumnId(null);
       setReassignTarget('');
     });
+  };
+
+  const isPublic = share?.visibility === 'public';
+
+  const runShare = async (fn: () => Promise<void>) => {
+    setShareBusy(true);
+    setShareError('');
+    try {
+      await fn();
+    } catch (err: any) {
+      setShareError(err?.message || 'Falha na operação do link público');
+    } finally {
+      setShareBusy(false);
+    }
+  };
+
+  const handleToggleShare = () =>
+    runShare(async () => {
+      if (isPublic) {
+        await api.revokeBoardShare(currentBoard.id);
+        setShare({ visibility: 'private', token: null, url: null, expiresAt: null });
+      } else {
+        setShare(await api.createBoardShare(currentBoard.id));
+      }
+    });
+
+  const handleRevokeShare = () =>
+    runShare(async () => {
+      await api.revokeBoardShare(currentBoard.id);
+      setShare({ visibility: 'private', token: null, url: null, expiresAt: null });
+    });
+
+  const handleCopyLink = async () => {
+    if (!share?.url) return;
+    try {
+      await navigator.clipboard.writeText(share.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setShareError('Não foi possível copiar — copie manualmente');
+    }
   };
 
   return (
@@ -298,6 +361,90 @@ export const BoardSettingsModal: React.FC = () => {
           <p className="text-[10px] text-slate-400 mt-2">
             Limite de 30 colunas. Alterações são aplicadas imediatamente no quadro.
           </p>
+        </div>
+
+        {/* Quadro público/privado (item 1.2) */}
+        <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Quadro público</p>
+
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <button
+                role="switch"
+                aria-checked={Boolean(isPublic)}
+                onClick={handleToggleShare}
+                disabled={shareBusy || !share}
+                className={`relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-50 ${
+                  isPublic ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-700'
+                }`}
+                title={isPublic ? 'Desativar quadro público' : 'Ativar quadro público'}
+              >
+                <span
+                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${
+                    isPublic ? 'left-[18px]' : 'left-0.5'
+                  }`}
+                />
+              </button>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                  <Globe className={`w-3.5 h-3.5 ${isPublic ? 'text-emerald-500' : 'text-slate-400'}`} />
+                  {isPublic ? 'Quadro público ativo' : 'Quadro privado'}
+                </p>
+                <p className="text-[10px] text-slate-400">
+                  Qualquer pessoa com o link pode ver tarefas e nomes (somente leitura).
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {isPublic && (
+            <div className="flex items-center gap-2 flex-wrap p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
+              {share?.url ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 text-slate-400 shrink-0">
+                    <Link2 className="w-3.5 h-3.5" />
+                  </span>
+                  <input
+                    readOnly
+                    value={share.url}
+                    onFocus={(e) => e.target.select()}
+                    className="flex-1 min-w-40 text-[11px] font-mono px-2 py-1.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 focus:outline-none"
+                  />
+                  <button
+                    onClick={handleCopyLink}
+                    disabled={shareBusy}
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold px-2.5 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied ? 'Copiado' : 'Copiar link'}
+                  </button>
+                  <button
+                    onClick={handleRevokeShare}
+                    disabled={shareBusy}
+                    className="text-[11px] font-semibold px-2.5 py-1.5 rounded text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 disabled:opacity-40"
+                  >
+                    Revogar link
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => runShare(async () => setShare(await api.createBoardShare(currentBoard.id)))}
+                  disabled={shareBusy}
+                  className="inline-flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 rounded bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40"
+                >
+                  <Link2 className="w-3.5 h-3.5" />
+                  Gerar link
+                </button>
+              )}
+              {share?.expiresAt && (
+                <span className="text-[10px] text-slate-400">
+                  expira em {new Date(share.expiresAt).toLocaleDateString('pt-BR')}
+                </span>
+              )}
+            </div>
+          )}
+
+          {shareError && <p className="text-[10px] text-rose-500">{shareError}</p>}
         </div>
       </div>
     </div>

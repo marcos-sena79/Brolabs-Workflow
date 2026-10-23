@@ -45,6 +45,9 @@ import {
   noteUpdateSchema,
   noteAiSchema,
   noteFromSprintSchema,
+  shareCreateSchema,
+  tagCreateSchema,
+  tagUpdateSchema,
 } from './src/server/validation';
 import {
   resolvePermissions,
@@ -84,6 +87,8 @@ import {
   AiUnavailableError,
   AiFailedError,
 } from './src/server/ai/provider';
+import { logger } from './src/server/logger';
+import { migrationsSummary } from './src/server/migrate';
 
 dotenv.config();
 
@@ -144,6 +149,84 @@ app.use((req, res, next) => {
   res.header('X-Content-Type-Options', 'nosniff');
   res.header('X-Frame-Options', 'SAMEORIGIN');
   res.header('Referrer-Policy', 'same-origin');
+  res.header('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
+
+// Logging estruturado (item 3.6): 1 linha JSON por requisição /api (Vercel captura stdout/stderr)
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api')) return next();
+  const requestId = String(req.headers['x-request-id'] || crypto.randomUUID());
+  const start = Date.now();
+  res.header('X-Request-Id', requestId);
+  res.on('finish', () => {
+    const fields = {
+      requestId,
+      route: req.path,
+      method: req.method,
+      status: res.statusCode,
+      durationMs: Date.now() - start,
+      memberId: (req as any).memberId || null,
+    };
+    if (res.statusCode >= 500) logger.error('request', fields);
+    else logger.info('request', fields);
+  });
+  next();
+});
+
+// CSRF (item 3.7): a app usa Bearer (imune); se um browser enviar Origin em métodos
+// mutantes, só origens conhecidas passam. Sem Origin (curl/clients Bearer) segue.
+const trustedOrigins = new Set(
+  [
+    process.env.APP_URL,
+    process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : null,
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+  ]
+    .filter(Boolean)
+    .map((o) => String(o).replace(/\/+$/, '')),
+);
+app.use((req, res, next) => {
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE') {
+    const origin = req.headers.origin;
+    if (origin && !trustedOrigins.has(origin.replace(/\/+$/, ''))) {
+      return res.status(403).json({ error: 'Origem não permitida' });
+    }
+  }
+  next();
+});
+
+// Rate limit em memória por IP (item 3.7): 300 req/min em /api (exceto /api/public,
+// que tem bucket próprio) e 10/min em login/register. Sem dependência externa (R10).
+function makeRateLimiter(max: number, windowMs: number) {
+  const buckets = new Map<string, { count: number; resetAt: number }>();
+  return (key: string): boolean => {
+    const now = Date.now();
+    const b = buckets.get(key);
+    if (!b || b.resetAt <= now) {
+      if (buckets.size > 5000) {
+        for (const [k, v] of buckets) if (v.resetAt <= now) buckets.delete(k);
+      }
+      buckets.set(key, { count: 1, resetAt: now + windowMs });
+      return true;
+    }
+    b.count += 1;
+    return b.count <= max;
+  };
+}
+const checkApiLimit = makeRateLimiter(300, 60_000);
+const checkAuthLimit = makeRateLimiter(10, 60_000);
+app.use((req, res, next) => {
+  if (!req.path.startsWith('/api') || req.path.startsWith('/api/public')) return next();
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  if (!checkApiLimit(`api:${ip}`)) {
+    return res.status(429).json({ error: 'Muitas requisições. Tente novamente em 1 minuto.' });
+  }
+  const isCredential = req.path.endsWith('/login') || req.path.endsWith('/register');
+  if (isCredential && !checkAuthLimit(`auth:${ip}`)) {
+    return res.status(429).json({ error: 'Muitas tentativas de autenticação. Tente novamente em 1 minuto.' });
+  }
   next();
 });
 
@@ -312,6 +395,10 @@ app.get('/api/health', async (req, res) => {
       publicTables: parseInt(tablesRes.rows[0].count, 10),
       totalTasks: parseInt(tasksCount.rows[0].count, 10),
       totalBoards: parseInt(boardsCount.rows[0].count, 10),
+      smtp: smtpConfigured() ? 'configured' : 'unconfigured',
+      storage: getStorage() ? 'ok' : 'unconfigured',
+      ai: aiConfigured() ? 'configured' : 'unconfigured',
+      migrations: await migrationsSummary(),
     });
   } catch (error: any) {
     console.error('Health check failed:', error);
@@ -581,6 +668,25 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
   }
 });
 
+// --- TAGS (item 2.2 — auto-create implícito mantém tags livres na UX atual) ---
+
+async function ensureTagsExist(tags: any, memberId: string): Promise<void> {
+  if (!Array.isArray(tags)) return;
+  const seen = new Set<string>();
+  for (const raw of tags) {
+    const name = typeof raw === 'string' ? raw.trim() : '';
+    if (!name || name.length > 60) continue;
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await query(
+      `INSERT INTO tags (id, name, color, created_by)
+       VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+      [`tag-${crypto.randomUUID().slice(0, 8)}`, name, '#64748b', memberId]
+    );
+  }
+}
+
 // --- TASKS ENDPOINTS --- //
 
 app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'), validateBody(taskCreateSchema), async (req, res) => {
@@ -621,6 +727,10 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
         JSON.stringify(t.dependencies || []),
       ]
     );
+
+    if (Array.isArray(t.tags) && t.tags.length) {
+      await ensureTagsExist(t.tags, req.memberId!).catch(() => {});
+    }
 
     res.status(201).json({ success: true, task: t });
   } catch (error: any) {
@@ -695,6 +805,10 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
         id,
       ]
     );
+
+    if (Array.isArray(updates.tags)) {
+      await ensureTagsExist(updates.tags, req.memberId!).catch(() => {});
+    }
 
     res.json({ success: true, task: merged });
   } catch (error: any) {
@@ -958,6 +1072,178 @@ app.delete('/api/boards/:id', authenticateToken, requireBoardPermission('canMana
   } catch (error: any) {
     console.error('Error deleting board:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// --- BOARD SHARE (item 1.2 — quadro público/privado) --- //
+
+function shareUrlBase(req: any): string {
+  return (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).replace(/\/+$/, '');
+}
+
+function isShareActive(row: any): boolean {
+  if (row.visibility !== 'public' || !row.share_token) return false;
+  if (row.share_token_expires_at && new Date(row.share_token_expires_at) < new Date()) return false;
+  return true;
+}
+
+app.get('/api/boards/:id/share', authenticateToken, requireBoardPermission('canManageBoard'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await query(
+      'SELECT visibility, share_token, share_token_expires_at FROM boards WHERE id = $1',
+      [id]
+    );
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Quadro não encontrado' });
+    const b = r.rows[0];
+    const active = isShareActive(b);
+    res.json({
+      visibility: b.visibility === 'public' ? 'public' : 'private',
+      token: active ? b.share_token : null,
+      url: active ? `${shareUrlBase(req)}/q/${b.share_token}` : null,
+      expiresAt: active ? b.share_token_expires_at : null,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post(
+  '/api/boards/:id/share',
+  authenticateToken,
+  requireBoardPermission('canManageBoard'),
+  validateBody(shareCreateSchema),
+  async (req, res) => {
+    try {
+      const { id } = req.params;
+      const expiresInDays = req.body.expiresInDays ?? 90;
+      const token = crypto.randomBytes(32).toString('hex');
+      const r = await query(
+        `UPDATE boards
+         SET visibility = 'public', share_token = $1,
+             share_token_expires_at = NOW() + make_interval(days => $2::int),
+             share_token_created_by = $3, updated_at = NOW()
+         WHERE id = $4
+         RETURNING share_token, share_token_expires_at`,
+        [token, expiresInDays, req.memberId, id]
+      );
+      if (r.rows.length === 0) return res.status(404).json({ error: 'Quadro não encontrado' });
+      res.status(201).json({
+        token: r.rows[0].share_token,
+        url: `${shareUrlBase(req)}/q/${r.rows[0].share_token}`,
+        expiresAt: r.rows[0].share_token_expires_at,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.delete('/api/boards/:id/share', authenticateToken, requireBoardPermission('canManageBoard'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const r = await query(
+      `UPDATE boards
+       SET visibility = 'private', share_token = NULL,
+           share_token_expires_at = NULL, share_token_created_by = NULL, updated_at = NOW()
+       WHERE id = $1`,
+      [id]
+    );
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Quadro não encontrado' });
+    res.json({ visibility: 'private' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Rate limit em memória por IP (30/min) — aceito na Onda 1 (risco R10)
+const publicRateBuckets = new Map<string, { count: number; resetAt: number }>();
+function publicRateLimit(key: string, max = 30, windowMs = 60000): boolean {
+  const now = Date.now();
+  const bucket = publicRateBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    publicRateBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    if (publicRateBuckets.size > 5000) {
+      for (const [k, v] of publicRateBuckets) if (v.resetAt <= now) publicRateBuckets.delete(k);
+    }
+    return true;
+  }
+  bucket.count += 1;
+  return bucket.count <= max;
+}
+
+// View pública somente leitura, sem auth (item 1.2) — nunca expõe e-mails/PII
+app.get('/api/public/boards/:token', async (req, res) => {
+  try {
+    const { token } = req.params;
+    const ip = req.ip || req.socket.remoteAddress || 'unknown';
+    if (!publicRateLimit(ip)) {
+      return res.status(429).json({ error: 'Muitas tentativas. Tente novamente em 1 minuto.' });
+    }
+    const notFound = () => res.status(404).json({ error: 'Link inválido ou desativado' });
+    if (!/^[a-f0-9]{64}$/.test(token)) return notFound();
+
+    const r = await query(
+      `SELECT id, key, name, description, sprint_name, sprint_goal, sprint_start_date, sprint_end_date,
+              columns, epics, visibility, share_token_expires_at
+       FROM boards WHERE share_token = $1`,
+      [token]
+    );
+    if (r.rows.length === 0) return notFound();
+    const b = r.rows[0];
+    if (b.visibility !== 'public') return notFound();
+    if (b.share_token_expires_at && new Date(b.share_token_expires_at) < new Date()) return notFound();
+
+    const tasksRes = await query(
+      `SELECT t.*, m.name AS assignee_name FROM tasks t
+       LEFT JOIN members m ON m.id = t.assignee_id
+       WHERE t.board_id = $1 AND t.archived_at IS NULL
+       ORDER BY t.created_at DESC`,
+      [b.id]
+    );
+
+    const publicTasks = tasksRes.rows.map((t) => {
+      const comments = safeJson(t.comments, []);
+      const subtasks = safeJson(t.subtasks, []);
+      return {
+        id: t.id,
+        key: t.key,
+        title: t.title,
+        statusId: t.status_id,
+        priority: t.priority,
+        issueType: t.issue_type,
+        assigneeName: t.assignee_name || null,
+        dueDate: t.due_date || '',
+        storyPoints: parseInt(t.story_points, 10) || 0,
+        tags: safeJson(t.tags, []),
+        subtasks: (Array.isArray(subtasks) ? subtasks : []).map((s: any) => ({
+          title: String(s?.title ?? ''),
+          completed: Boolean(s?.completed),
+        })),
+        commentsCount: Array.isArray(comments) ? comments.length : 0,
+      };
+    });
+
+    res.set('Cache-Control', 'public, max-age=60');
+    res.set('X-Robots-Tag', 'noindex');
+    res.json({
+      board: {
+        id: b.id,
+        key: b.key,
+        name: b.name,
+        description: b.description || '',
+        sprintName: b.sprint_name || '',
+        sprintGoal: b.sprint_goal || '',
+        sprintStartDate: b.sprint_start_date || '',
+        sprintEndDate: b.sprint_end_date || '',
+        columns: safeJson(b.columns, []),
+        epics: safeJson(b.epics, []),
+      },
+      tasks: publicTasks,
+    });
+  } catch (error) {
+    console.error('Public board failed:', error);
+    res.status(500).json({ error: 'Erro ao carregar quadro público' });
   }
 });
 
@@ -2606,6 +2892,231 @@ ${context}
     await logAiUsage(memberId, 'from_sprint', inputChars, 0, 'error').catch(() => {});
     console.error('From-sprint note failed:', error);
     res.status(status).json({ error: error.message || 'Falha na IA' });
+  }
+});
+
+// --- TAGS ENDPOINTS (item 2.2 — catálogo global de etiquetas) --- //
+
+async function hasAnyBoardManage(memberId: string): Promise<boolean> {
+  const m = await query('SELECT system_role FROM members WHERE id = $1', [memberId]);
+  if (m.rows[0]?.system_role === 'admin') return true;
+  const r = await query(
+    `SELECT 1 FROM board_members
+     WHERE member_id = $1
+       AND (role = 'owner' OR COALESCE((permissions ->> 'canManageBoard')::boolean, FALSE))
+     LIMIT 1`,
+    [memberId]
+  );
+  return r.rows.length > 0;
+}
+
+async function requireTagManage(req: any, res: any): Promise<boolean> {
+  if (await hasAnyBoardManage(req.memberId!)) return true;
+  res.status(403).json({ error: 'Sem permissão para gerenciar etiquetas', required: 'canManageBoard' });
+  return false;
+}
+
+async function tagUsageCount(name: string): Promise<number> {
+  const r = await query(
+    `SELECT COUNT(*)::int AS n FROM tasks, jsonb_array_elements_text(tasks.tags) x
+     WHERE lower(x) = lower($1)`,
+    [name]
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
+function mapTag(row: any, usageCount: number, orphan = false) {
+  return {
+    id: row.id,
+    name: row.name,
+    color: row.color,
+    usageCount,
+    ...(orphan ? { orphan: true } : {}),
+  };
+}
+
+app.get('/api/tags', authenticateToken, async (req, res) => {
+  try {
+    const [catalogRes, usageRes] = await Promise.all([
+      query('SELECT * FROM tags ORDER BY lower(name)'),
+      query(
+        `SELECT lower(x) AS lname, MIN(x) AS name, COUNT(*)::int AS cnt
+         FROM tasks, jsonb_array_elements_text(tasks.tags) x
+         WHERE length(trim(x)) > 0
+         GROUP BY lower(x)`
+      ),
+    ]);
+
+    const usage = new Map<string, { name: string; cnt: number }>(
+      usageRes.rows.map((r: any) => [r.lname, { name: r.name, cnt: r.cnt }])
+    );
+
+    const tags = catalogRes.rows.map((row: any) =>
+      mapTag(row, usage.get(String(row.name).toLowerCase())?.cnt || 0)
+    );
+    const seen = new Set(tags.map((t) => t.name.toLowerCase()));
+    for (const [lname, u] of usage) {
+      if (!seen.has(lname)) {
+        tags.push(mapTag({ id: `orphan-${lname}`.slice(0, 100), name: u.name, color: '#64748b' }, u.cnt, true));
+      }
+    }
+    tags.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    res.json({ tags });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/tags', authenticateToken, validateBody(tagCreateSchema), async (req, res) => {
+  try {
+    if (!(await requireTagManage(req, res))) return;
+    const { name, color } = req.body;
+    const existing = await query('SELECT * FROM tags WHERE lower(name) = lower($1)', [name]);
+    if (existing.rows.length > 0) {
+      return res
+        .status(409)
+        .json({ error: 'Etiqueta já existe com esse nome', tag: mapTag(existing.rows[0], 0) });
+    }
+    const id = `tag-${crypto.randomUUID().slice(0, 8)}`;
+    const r = await query(
+      'INSERT INTO tags (id, name, color, created_by) VALUES ($1, $2, $3, $4) RETURNING *',
+      [id, name, color || '#64748b', req.memberId]
+    );
+    res.status(201).json({ tag: mapTag(r.rows[0], await tagUsageCount(name)) });
+  } catch (error: any) {
+    if (error?.code === '23505') {
+      return res.status(409).json({ error: 'Etiqueta já existe com esse nome' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/tags/:id', authenticateToken, validateBody(tagUpdateSchema), async (req, res) => {
+  const client = await pool.connect();
+  let released = false;
+  const release = () => {
+    if (!released) {
+      released = true;
+      client.release();
+    }
+  };
+  try {
+    if (!(await requireTagManage(req, res))) return release();
+    const { id } = req.params;
+    const cur = await query('SELECT * FROM tags WHERE id = $1', [id]);
+    if (cur.rows.length === 0) {
+      release();
+      return res.status(404).json({ error: 'Etiqueta não encontrada' });
+    }
+    const oldName: string = cur.rows[0].name;
+    const newName: string = req.body.name ?? oldName;
+    const color: string = req.body.color ?? cur.rows[0].color;
+    const renamed = newName !== oldName;
+
+    if (renamed) {
+      const dup = await query('SELECT id, name FROM tags WHERE lower(name) = lower($1) AND id <> $2', [newName, id]);
+      if (dup.rows.length > 0) {
+        release();
+        return res.status(409).json({ error: 'Etiqueta já existe com esse nome', tag: dup.rows[0] });
+      }
+    }
+
+    let tasksUpdated = 0;
+    await client.query('BEGIN');
+    try {
+      if (renamed) {
+        const upd = await client.query(
+          `UPDATE tasks SET tags = (
+             SELECT COALESCE(jsonb_agg(DISTINCT CASE WHEN lower(x) = lower($1) THEN $2 ELSE x END), '[]'::jsonb)
+             FROM jsonb_array_elements_text(tasks.tags) x
+           )
+           WHERE EXISTS (
+             SELECT 1 FROM jsonb_array_elements_text(tasks.tags) x WHERE lower(x) = lower($1)
+           )`,
+          [oldName, newName]
+        );
+        tasksUpdated = upd.rowCount ?? 0;
+        await client.query('UPDATE tags SET name = $1, color = $2 WHERE id = $3', [newName, color, id]);
+      } else {
+        await client.query('UPDATE tags SET color = $1 WHERE id = $2', [color, id]);
+      }
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    }
+    release();
+
+    const updated = await query('SELECT * FROM tags WHERE id = $1', [id]);
+    const usage = await tagUsageCount(renamed ? newName : oldName);
+    res.json({ tag: mapTag(updated.rows[0], usage), tasksUpdated });
+  } catch (error: any) {
+    if (!released) await client.query('ROLLBACK').catch(() => {});
+    release();
+    if (error?.code === '23505') {
+      return res.status(409).json({ error: 'Etiqueta já existe com esse nome' });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/tags/:id', authenticateToken, async (req, res) => {
+  const client = await pool.connect();
+  let released = false;
+  const release = () => {
+    if (!released) {
+      released = true;
+      client.release();
+    }
+  };
+  try {
+    if (!(await requireTagManage(req, res))) return release();
+    const { id } = req.params;
+    const cur = await query('SELECT * FROM tags WHERE id = $1', [id]);
+    if (cur.rows.length === 0) {
+      release();
+      return res.status(404).json({ error: 'Etiqueta não encontrada' });
+    }
+    const name: string = cur.rows[0].name;
+    const removeFromTasks = req.query.removeFromTasks === 'true';
+    const usage = await tagUsageCount(name);
+
+    if (usage > 0 && !removeFromTasks) {
+      release();
+      return res.status(409).json({
+        error: `Etiqueta usada em ${usage} tarefa(s). Remover das tarefas?`,
+        usageCount: usage,
+      });
+    }
+
+    let removedFromTasks = 0;
+    await client.query('BEGIN');
+    try {
+      if (usage > 0) {
+        const upd = await client.query(
+          `UPDATE tasks SET tags = COALESCE((
+             SELECT jsonb_agg(x) FROM jsonb_array_elements_text(tasks.tags) x WHERE lower(x) <> lower($1)
+           ), '[]'::jsonb)
+           WHERE EXISTS (
+             SELECT 1 FROM jsonb_array_elements_text(tasks.tags) x WHERE lower(x) = lower($1)
+           )`,
+          [name]
+        );
+        removedFromTasks = upd.rowCount ?? 0;
+      }
+      await client.query('DELETE FROM tags WHERE id = $1', [id]);
+      await client.query('COMMIT');
+    } catch (e) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw e;
+    }
+    release();
+
+    res.json({ removedFromTasks });
+  } catch (error: any) {
+    if (!released) await client.query('ROLLBACK').catch(() => {});
+    release();
+    res.status(500).json({ error: error.message });
   }
 });
 

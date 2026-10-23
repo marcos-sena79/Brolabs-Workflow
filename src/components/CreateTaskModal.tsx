@@ -16,6 +16,7 @@ export const CreateTaskModal: React.FC = () => {
     createTask,
     addSubtask,
     addDependency,
+    tagCatalog,
   } = useAgile();
 
   const [title, setTitle] = useState('');
@@ -39,7 +40,6 @@ export const CreateTaskModal: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
-
     const tags = tagInput
       .split(',')
       .map((t) => t.trim())
@@ -81,6 +81,17 @@ export const CreateTaskModal: React.FC = () => {
     setQuickSubtasksInput('');
     setInitialBlockerTaskId('');
     setIsCreateModalOpen(false);
+  };
+
+  const toggleCatalogTag = (name: string) => {
+    const parts = tagInput
+      .split(',')
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const idx = parts.findIndex((p) => p.toLowerCase() === name.toLowerCase());
+    if (idx >= 0) parts.splice(idx, 1);
+    else parts.push(name);
+    setTagInput(parts.join(', '));
   };
 
   return (
@@ -287,6 +298,50 @@ export const CreateTaskModal: React.FC = () => {
                   </option>
                 ))}
             </select>
+          </div>
+
+          {/* Tags (item 2.2 — texto livre ou catálogo com cores) */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              Marcadores (Tags)
+            </label>
+            <input
+              value={tagInput}
+              onChange={(e) => setTagInput(e.target.value)}
+              placeholder="Separados por vírgula (ex.: Backend, Bug)"
+              className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            {tagCatalog.filter((s) => !s.orphan).length > 0 && (
+              <div className="flex flex-wrap gap-1 mt-1.5">
+                {tagCatalog
+                  .filter((s) => !s.orphan)
+                  .slice(0, 10)
+                  .map((s) => {
+                    const active = tagInput
+                      .split(',')
+                      .map((p) => p.trim().toLowerCase())
+                      .includes(s.name.toLowerCase());
+                    return (
+                      <button
+                        key={s.id}
+                        type="button"
+                        onClick={() => toggleCatalogTag(s.name)}
+                        className={`text-[10px] px-1.5 py-0.5 rounded-full border transition-opacity ${
+                          active ? 'font-bold' : 'hover:opacity-75'
+                        }`}
+                        style={{
+                          borderColor: `${s.color}${active ? '' : '55'}`,
+                          backgroundColor: `${s.color}${active ? '30' : '14'}`,
+                          color: s.color,
+                        }}
+                      >
+                        {active ? '✓ ' : ''}
+                        {s.name}
+                      </button>
+                    );
+                  })}
+              </div>
+            )}
           </div>
 
           {/* Quick Subtasks Batch Adder */}

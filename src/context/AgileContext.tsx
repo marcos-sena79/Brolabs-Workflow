@@ -23,6 +23,7 @@ import {
   TodoSuggestion,
   Note,
   NoteAiAction,
+  TagDef,
 } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
@@ -229,6 +230,16 @@ interface AgileContextType {
   createNoteFromSprint: () => Promise<Note>;
   runNoteAi: (id: string, action: NoteAiAction) => Promise<{ content: string }>;
 
+  // Etiquetas globais (item 2.2)
+  tagCatalog: TagDef[];
+  fetchTags: () => Promise<void>;
+  createTag: (input: { name: string; color?: string }) => Promise<TagDef>;
+  updateTag: (id: string, input: { name?: string; color?: string }) => Promise<TagDef>;
+  deleteTag: (id: string, removeFromTasks?: boolean) => Promise<{ removedFromTasks: number }>;
+  colorForTag: (name: string) => string;
+  isTagsManagerOpen: boolean;
+  setIsTagsManagerOpen: (open: boolean) => void;
+
   // Reset
   resetToDemoData: () => void;
 }
@@ -351,6 +362,10 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [notes, setNotes] = useState<Note[]>([]);
   const [isNotesLoading, setIsNotesLoading] = useState(false);
 
+  // Etiquetas globais (item 2.2)
+  const [tagCatalog, setTagCatalog] = useState<TagDef[]>([]);
+  const [isTagsManagerOpen, setIsTagsManagerOpen] = useState(false);
+
   // Fetch all initial data from NeonDB backend
   const fetchDbData = useCallback(async () => {
     try {
@@ -395,6 +410,9 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       } else if (data.members && data.members[0]) {
         setCurrentUserIdState(data.members[0].id);
       }
+
+      // Catálogo de etiquetas global (item 2.2) — silencioso se falhar
+      api.getTags().then(setTagCatalog).catch(() => {});
 
       setDbConnected(true);
     } catch (err) {
@@ -483,6 +501,10 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           setIsBoardSettingsOpen(false);
           return;
         }
+        if (isTagsManagerOpen) {
+          setIsTagsManagerOpen(false);
+          return;
+        }
         if (isTaskArchiveOpen) {
           setIsTaskArchiveOpen(false);
           return;
@@ -508,6 +530,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         isCommandPaletteOpen ||
         isEmailDrawerOpen ||
         isBoardSettingsOpen ||
+        isTagsManagerOpen ||
         isTaskArchiveOpen
       ) {
         return;
@@ -670,6 +693,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     isShortcutsModalOpen,
     isCommandPaletteOpen,
     isBoardSettingsOpen,
+    isTagsManagerOpen,
     isTaskArchiveOpen,
     isEmailDrawerOpen,
     activeTimer,
@@ -1903,6 +1927,69 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const runNoteAi = (id: string, action: NoteAiAction) => api.runNoteAi(id, action);
 
+  // ---------------------- Etiquetas globais (item 2.2) ---------------------- //
+
+  const fetchTags = useCallback(async () => {
+    try {
+      const list = await api.getTags();
+      setTagCatalog(list);
+    } catch (err) {
+      console.error('Falha ao carregar etiquetas:', err);
+    }
+  }, []);
+
+  const createTag = async (input: { name: string; color?: string }) => {
+    const tag = await api.createTag(input);
+    await fetchTags();
+    return tag;
+  };
+
+  const updateTag = async (id: string, input: { name?: string; color?: string }) => {
+    const oldName = tagCatalog.find((t) => t.id === id)?.name;
+    const { tag } = await api.updateTag(id, input);
+
+    // Rename propaga localmente para os chips mudarem no board sem refetch
+    if (oldName && input.name && input.name !== oldName) {
+      const oldKey = oldName.toLowerCase();
+      const newName = input.name;
+      setTasks((prev) =>
+        prev.map((t) => {
+          if (!Array.isArray(t.tags) || !t.tags.some((x) => String(x).toLowerCase() === oldKey)) return t;
+          const mapped = t.tags.map((x) => (String(x).toLowerCase() === oldKey ? newName : String(x)));
+          return { ...t, tags: Array.from(new Set(mapped)) };
+        })
+      );
+    }
+    await fetchTags();
+    return tag;
+  };
+
+  const deleteTag = async (id: string, removeFromTasks = false) => {
+    const oldName = tagCatalog.find((t) => t.id === id)?.name;
+    const result = await api.deleteTag(id, removeFromTasks);
+    if (removeFromTasks && oldName) {
+      const key = oldName.toLowerCase();
+      setTasks((prev) =>
+        prev.map((t) =>
+          Array.isArray(t.tags) && t.tags.some((x) => String(x).toLowerCase() === key)
+            ? { ...t, tags: t.tags.filter((x) => String(x).toLowerCase() !== key) }
+            : t
+        )
+      );
+    }
+    await fetchTags();
+    return result;
+  };
+
+  const colorForTag = useCallback(
+    (name: string): string => {
+      const key = String(name || '').toLowerCase();
+      const hit = tagCatalog.find((t) => t.name.toLowerCase() === key && !t.orphan);
+      return hit?.color || '#64748b';
+    },
+    [tagCatalog]
+  );
+
   // Real-time Timer
   const startTimer = (taskId: string) => {
     setActiveTimer({
@@ -1976,6 +2063,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         isShortcutsModalOpen,
         isCommandPaletteOpen,
         isBoardSettingsOpen,
+        isTagsManagerOpen,
         isTaskArchiveOpen,
         archivedTasks,
         isArchivedTasksLoading,
@@ -1991,6 +2079,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         setIsShortcutsModalOpen,
         setIsCommandPaletteOpen,
         setIsBoardSettingsOpen,
+        setIsTagsManagerOpen,
         setIsTaskArchiveOpen,
         createTask,
         updateTask,
@@ -2068,6 +2157,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         deleteNote,
         createNoteFromSprint,
         runNoteAi,
+        tagCatalog,
+        fetchTags,
+        createTag,
+        updateTag,
+        deleteTag,
+        colorForTag,
       }}
     >
       {children}
