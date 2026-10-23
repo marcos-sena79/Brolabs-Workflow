@@ -25,9 +25,13 @@ import {
   Settings,
   Volume2,
   VolumeX,
+  Sun,
+  Moon,
+  Monitor,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { useAuth } from '../context/AuthContext';
+import { useTheme, Theme } from '../context/ThemeContext';
 import { formatHours, formatRelativeTime } from '../utils/agileHelpers';
 
 export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) => {
@@ -76,6 +80,14 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncSuccess, setSyncSuccess] = useState(false);
   const [isSoundMenuOpen, setIsSoundMenuOpen] = useState(false);
+
+  // Tema (item 5.4)
+  const { theme, setTheme } = useTheme();
+  const themeOptions: { value: Theme; label: string; Icon: React.FC<{ className?: string }> }[] = [
+    { value: 'light', label: 'Claro', Icon: Sun },
+    { value: 'dark', label: 'Escuro', Icon: Moon },
+    { value: 'system', label: 'Sistema', Icon: Monitor },
+  ];
 
   // New Board Form State
   const [newBoardName, setNewBoardName] = useState('');
@@ -514,6 +526,26 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
                 <div className="px-3 py-1 border-b border-slate-100 dark:border-slate-800">
                   <p className="text-xs text-slate-500 dark:text-slate-400">{authMember.email}</p>
                   <p className="text-[10px] text-slate-400 truncate">{authMember.role} • {authMember.department}</p>
+                </div>
+                <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5">Tema</p>
+                  <div className="flex gap-1">
+                    {themeOptions.map(({ value, label, Icon }) => (
+                      <button
+                        key={value}
+                        onClick={() => setTheme(value)}
+                        title={label}
+                        className={`flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded-md text-[11px] font-semibold border transition-colors ${
+                          theme === value
+                            ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-300 dark:border-indigo-700 text-indigo-700 dark:text-indigo-300'
+                            : 'border-slate-200 dark:border-slate-700 text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        <Icon className="w-3 h-3" />
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <div className="px-3 py-1">
                   <button

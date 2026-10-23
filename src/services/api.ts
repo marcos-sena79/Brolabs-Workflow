@@ -14,6 +14,10 @@ import {
   BoardRole,
   PermissionFlag,
   MemberPreferences,
+  DailyTodo,
+  TodoSuggestion,
+  Note,
+  NoteAiAction,
 } from '../types';
 
 export interface InitialStateResponse {
@@ -556,6 +560,129 @@ export const api = {
     }
     const data = await res.json();
     return data.preferences || {};
+  },
+
+  // --- To-Do do dia (item 2.4) ---
+
+  async getDailyTodos(date?: string): Promise<{ todos: DailyTodo[]; suggested: TodoSuggestion[] }> {
+    const qs = date ? `?date=${encodeURIComponent(date)}` : '';
+    const res = await fetch(`/api/todos${qs}`, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Falha ao carregar To-Do do dia');
+    return res.json();
+  },
+
+  async createDailyTodo(input: {
+    title: string;
+    dueDate?: string;
+    boardId?: string;
+    sourceTaskId?: string;
+  }): Promise<DailyTodo> {
+    const res = await fetch('/api/todos', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(input),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao criar item');
+    return data.todo;
+  },
+
+  async updateDailyTodo(
+    id: string,
+    updates: { title?: string; done?: boolean; dueDate?: string; position?: number }
+  ): Promise<DailyTodo> {
+    const res = await fetch(`/api/todos/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(updates),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao atualizar item');
+    return data.todo;
+  },
+
+  async deleteDailyTodo(id: string): Promise<void> {
+    const res = await fetch(`/api/todos/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao remover item');
+  },
+
+  async createTodoFromTask(taskId: string): Promise<DailyTodo> {
+    const res = await fetch(`/api/todos/from-task/${encodeURIComponent(taskId)}`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao vincular tarefa');
+    return data.todo;
+  },
+
+  // --- Notas + IA (item 4.1) ---
+
+  async getNotes(boardId: string): Promise<Note[]> {
+    const res = await fetch(`/api/notes?boardId=${encodeURIComponent(boardId)}`, {
+      headers: getAuthHeaders(),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao carregar notas');
+    return data.notes || [];
+  },
+
+  async createNote(input: { boardId: string; title?: string; content?: string }): Promise<Note> {
+    const res = await fetch('/api/notes', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(input),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao criar nota');
+    return data.note;
+  },
+
+  async updateNote(
+    id: string,
+    updates: { title?: string; content?: string; pinned?: boolean }
+  ): Promise<Note> {
+    const res = await fetch(`/api/notes/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(updates),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao atualizar nota');
+    return data.note;
+  },
+
+  async deleteNote(id: string): Promise<void> {
+    const res = await fetch(`/api/notes/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao remover nota');
+  },
+
+  async runNoteAi(id: string, action: NoteAiAction): Promise<{ content: string }> {
+    const res = await fetch(`/api/notes/${encodeURIComponent(id)}/ai`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ action }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao executar ação de IA');
+    return data;
+  },
+
+  async createNoteFromSprint(boardId: string): Promise<Note> {
+    const res = await fetch('/api/notes/ai/from-sprint', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ boardId }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao gerar nota da sprint');
+    return data.note;
   },
 
   // Bucket Storage

@@ -14,6 +14,7 @@ import {
   X,
   Archive,
   Shield,
+  NotebookPen,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { ViewTab } from '../types';
@@ -34,6 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     setIsShortcutsModalOpen,
     setIsTaskArchiveOpen,
     setIsBoardAccessOpen,
+    dailyTodos,
   } = useAgile();
 
   const totalTasks = boardTasks.length;
@@ -43,10 +45,20 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   const totalEstimated = boardTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
   const totalLogged = boardTasks.reduce((acc, t) => acc + (t.loggedHours || 0), 0);
 
+  const pendingTodos = dailyTodos.filter((t) => !t.done).length;
+
   const navItems: { id: ViewTab; label: string; icon: React.FC<{ className?: string }>; badge?: string; shortcutKey: string }[] = [
     { id: 'kanban', label: 'Quadro Kanban', icon: Kanban, shortcutKey: '1' },
     { id: 'backlog', label: 'Backlog & Lista', icon: ListTodo, shortcutKey: '2' },
-    { id: 'daily_dashboard', label: 'Acompanhamento Diário', icon: CalendarCheck, badge: 'Hoje', shortcutKey: '3' },
+    {
+      id: 'my_todo',
+      label: 'Minha To-Do',
+      icon: ListTodo,
+      badge: pendingTodos > 0 ? String(pendingTodos) : undefined,
+      shortcutKey: '3',
+    },
+    { id: 'notes', label: 'Notas', icon: NotebookPen, shortcutKey: '8' },
+    { id: 'daily_dashboard', label: 'Acompanhamento Diário', icon: CalendarCheck, badge: 'Hoje', shortcutKey: '9' },
     { id: 'time_tracking', label: 'Gestão de Horas (Est. x Real)', icon: Clock, shortcutKey: '4' },
     { id: 'productivity_reports', label: 'Relatórios de Produtividade', icon: BarChart3, badge: 'Auto', shortcutKey: '5' },
     { id: 'member_performance', label: 'Desempenho por Membro', icon: Users, shortcutKey: '6' },

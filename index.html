@@ -10,6 +10,18 @@
     <meta property="og:description" content="Ferramenta ágil estilo Jira com gestão de boards, sub-tarefas, horas estimadas vs realizadas, relatórios de produtividade e integração de comunicação." />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
+      <script>
+      // Aplica o tema antes do bundle para evitar flash claro-escuro (item 5.4)
+      (function () {
+        try {
+          var t = localStorage.getItem('brolabs_theme') || 'system';
+          var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          var el = document.documentElement;
+          el.classList.toggle('dark', dark);
+          el.style.colorScheme = dark ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

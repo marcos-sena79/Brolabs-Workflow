@@ -19,9 +19,14 @@ import {
   BoardPermissions,
   PermissionFlag,
   MemberPreferences,
+  DailyTodo,
+  TodoSuggestion,
+  Note,
+  NoteAiAction,
 } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
+import { useTheme } from './ThemeContext';
 import { getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
 import { playSound, SoundEvent } from '../utils/sound';
 
@@ -203,6 +208,27 @@ interface AgileContextType {
   isBoardAccessOpen: boolean;
   setIsBoardAccessOpen: (open: boolean) => void;
 
+  // To-Do do dia (item 2.4)
+  dailyTodos: DailyTodo[];
+  todoSuggestions: TodoSuggestion[];
+  isTodosLoading: boolean;
+  fetchDailyTodos: (date?: string) => Promise<void>;
+  createDailyTodo: (input: { title: string; dueDate?: string; boardId?: string }) => Promise<DailyTodo>;
+  toggleDailyTodo: (id: string, done: boolean) => void;
+  updateDailyTodo: (id: string, updates: { title?: string; dueDate?: string; position?: number }) => Promise<void>;
+  deleteDailyTodo: (id: string) => void;
+  createTodoFromTask: (taskId: string) => Promise<DailyTodo>;
+
+  // Notas + IA (item 4.1)
+  notes: Note[];
+  isNotesLoading: boolean;
+  fetchNotes: (boardId: string) => Promise<void>;
+  createNote: (input: { title?: string; content?: string }) => Promise<Note>;
+  updateNote: (id: string, updates: { title?: string; content?: string; pinned?: boolean }) => Promise<Note>;
+  deleteNote: (id: string) => void;
+  createNoteFromSprint: () => Promise<Note>;
+  runNoteAi: (id: string, action: NoteAiAction) => Promise<{ content: string }>;
+
   // Reset
   resetToDemoData: () => void;
 }
@@ -242,6 +268,9 @@ const AgileContext = createContext<AgileContextType | undefined>(undefined);
 export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   // Authentication (from AuthContext)
   const { member: authMember, login: authLogin, logout: authLogout, isAuthenticated: authIsAuthenticated, isLoading: authIsLoading } = useAuth();
+
+  // Tema (item 5.4) — servidor vence sobre o local
+  const { hydrateFromServer: hydrateTheme } = useTheme();
 
   const [isLoading, setIsLoading] = useState(true);
   const [dbConnected, setDbConnected] = useState(true);
@@ -313,6 +342,15 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return DEFAULT_SOUND_PREFS;
   });
 
+  // To-Do do dia (item 2.4)
+  const [dailyTodos, setDailyTodos] = useState<DailyTodo[]>([]);
+  const [todoSuggestions, setTodoSuggestions] = useState<TodoSuggestion[]>([]);
+  const [isTodosLoading, setIsTodosLoading] = useState(false);
+
+  // Notas do board atual (item 4.1)
+  const [notes, setNotes] = useState<Note[]>([]);
+  const [isNotesLoading, setIsNotesLoading] = useState(false);
+
   // Fetch all initial data from NeonDB backend
   const fetchDbData = useCallback(async () => {
     try {
@@ -343,6 +381,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         } catch {
           // sem storage — ok
         }
+        if (data.preferences.theme) hydrateTheme(data.preferences.theme);
       }
 
       if (data.currentBoardId) {
@@ -364,7 +403,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [hydrateTheme]);
 
   useEffect(() => {
     fetchDbData();
@@ -489,13 +528,17 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             e.preventDefault();
             setCurrentView('backlog');
             return;
+          case 't':
+            e.preventDefault();
+            setCurrentView('my_todo');
+            return;
+          case 'n':
+            e.preventDefault();
+            setCurrentView('notes');
+            return;
           case 'd':
             e.preventDefault();
             setCurrentView('daily_dashboard');
-            return;
-          case 't':
-            e.preventDefault();
-            setCurrentView('time_tracking');
             return;
           case 'r':
             e.preventDefault();
@@ -531,6 +574,16 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return;
       }
       if (e.key === '3') {
+        e.preventDefault();
+        setCurrentView('my_todo');
+        return;
+      }
+      if (e.key === '8') {
+        e.preventDefault();
+        setCurrentView('notes');
+        return;
+      }
+      if (e.key === '9') {
         e.preventDefault();
         setCurrentView('daily_dashboard');
         return;
@@ -1755,6 +1808,101 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return true;
   };
 
+  // ---------------------- To-Do do dia (item 2.4) ---------------------- //
+
+  const todayISO = () => new Date().toISOString().slice(0, 10);
+
+  const fetchDailyTodos = useCallback(async (date?: string) => {
+    setIsTodosLoading(true);
+    try {
+      const data = await api.getDailyTodos(date || todayISO());
+      setDailyTodos(data.todos || []);
+      setTodoSuggestions(data.suggested || []);
+    } catch (err) {
+      console.error('Falha ao carregar To-Do do dia:', err);
+    } finally {
+      setIsTodosLoading(false);
+    }
+  }, []);
+
+  const createDailyTodo = async (input: { title: string; dueDate?: string; boardId?: string }) => {
+    const todo = await api.createDailyTodo({ ...input, boardId: input.boardId || currentBoardId });
+    setDailyTodos((prev) => [...prev, todo]);
+    return todo;
+  };
+
+  const toggleDailyTodo = (id: string, done: boolean) => {
+    const prev = dailyTodos;
+    setDailyTodos((list) => list.map((t) => (t.id === id ? { ...t, done } : t)));
+    api.updateDailyTodo(id, { done }).catch((err) => {
+      console.error(err);
+      setDailyTodos(prev); // uncheck otimista em caso de falha
+    });
+  };
+
+  const updateDailyTodo = async (id: string, updates: { title?: string; dueDate?: string; position?: number }) => {
+    const todo = await api.updateDailyTodo(id, updates);
+    setDailyTodos((list) => list.map((t) => (t.id === id ? todo : t)));
+  };
+
+  const deleteDailyTodo = (id: string) => {
+    const prev = dailyTodos;
+    setDailyTodos((list) => list.filter((t) => t.id !== id));
+    api.deleteDailyTodo(id).catch((err) => {
+      console.error(err);
+      setDailyTodos(prev);
+    });
+  };
+
+  const createTodoFromTask = async (taskId: string) => {
+    const todo = await api.createTodoFromTask(taskId);
+    setDailyTodos((prev) => [...prev, todo]);
+    setTodoSuggestions((prev) => prev.filter((s) => s.id !== taskId));
+    return todo;
+  };
+
+  // ---------------------- Notas + IA (item 4.1) ---------------------- //
+
+  const fetchNotes = useCallback(async (boardId: string) => {
+    setIsNotesLoading(true);
+    try {
+      const list = await api.getNotes(boardId);
+      setNotes(list);
+    } catch (err) {
+      console.error('Falha ao carregar notas:', err);
+    } finally {
+      setIsNotesLoading(false);
+    }
+  }, []);
+
+  const createNote = async (input: { title?: string; content?: string }) => {
+    const note = await api.createNote({ ...input, boardId: currentBoardId });
+    setNotes((prev) => [note, ...prev]);
+    return note;
+  };
+
+  const updateNote = async (id: string, updates: { title?: string; content?: string; pinned?: boolean }) => {
+    const updated = await api.updateNote(id, updates);
+    setNotes((prev) => prev.map((n) => (n.id === id ? updated : n)));
+    return updated;
+  };
+
+  const deleteNote = (id: string) => {
+    setNotes((prev) => prev.filter((n) => n.id !== id));
+    api.deleteNote(id).catch((err) => {
+      console.error(err);
+      fetchNotes(currentBoardId); // re-sincroniza em caso de falha
+    });
+  };
+
+  const createNoteFromSprint = async () => {
+    const note = await api.createNoteFromSprint(currentBoardId);
+    setNotes((prev) => [note, ...prev]);
+    return note;
+  };
+
+  const runNoteAi = (id: string, action: NoteAiAction) => api.runNoteAi(id, action);
+
   // Real-time Timer
   const startTimer = (taskId: string) => {
     setActiveTimer({
@@ -1903,6 +2051,23 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         deleteTaskAttachment,
         isBoardAccessOpen,
         setIsBoardAccessOpen,
+        dailyTodos,
+        todoSuggestions,
+        isTodosLoading,
+        fetchDailyTodos,
+        createDailyTodo,
+        toggleDailyTodo,
+        updateDailyTodo,
+        deleteDailyTodo,
+        createTodoFromTask,
+        notes,
+        isNotesLoading,
+        fetchNotes,
+        createNote,
+        updateNote,
+        deleteNote,
+        createNoteFromSprint,
+        runNoteAi,
       }}
     >
       {children}

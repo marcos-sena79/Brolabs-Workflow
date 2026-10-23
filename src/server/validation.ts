@@ -216,3 +216,60 @@ export const boardMemberPatchSchema = z
   .refine((v) => v.role !== undefined || v.permissions !== undefined, {
     message: 'Informe role ou permissions',
   });
+
+// --- To-Do do dia (item 2.4) ---
+
+const isoDate = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Data inválida (use YYYY-MM-DD)')
+  .refine((v) => {
+    const t = new Date(`${v}T00:00:00Z`).getTime();
+    if (Number.isNaN(t)) return false;
+    const now = Date.now();
+    const twoYears = 366 * 24 * 60 * 60 * 1000 * 2;
+    return t >= now - twoYears && t <= now + twoYears;
+  }, 'Data fora do intervalo razoável (±2 anos)');
+
+export const todoCreateSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  dueDate: isoDate.optional(),
+  boardId: idSchema.optional(),
+  sourceTaskId: idSchema.optional(),
+});
+
+export const todoUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200).optional(),
+    done: z.boolean().optional(),
+    dueDate: isoDate.optional(),
+    position: z.number().int().min(0).max(10000).optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nada para atualizar' });
+
+export const todoListQuerySchema = z.object({
+  date: isoDate.optional(),
+});
+
+// --- Notas + IA (item 4.1) ---
+
+export const noteCreateSchema = z.object({
+  boardId: idSchema,
+  title: z.string().trim().min(1).max(255).optional(),
+  content: z.string().max(50000).optional(),
+});
+
+export const noteUpdateSchema = z
+  .object({
+    title: z.string().trim().min(1).max(255).optional(),
+    content: z.string().max(50000).optional(),
+    pinned: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nada para atualizar' });
+
+export const noteAiSchema = z.object({
+  action: z.enum(['summarize', 'expand', 'action_items']),
+});
+
+export const noteFromSprintSchema = z.object({
+  boardId: idSchema,
+});

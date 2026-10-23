@@ -1,1 +1,5 @@
 @import "tailwindcss";
+
+/* Tema por classe (item 5.4) — o app já usa `dark:` em todos os componentes;
+   sem esta linha o Tailwind v4 usa media query e a troca manual de tema não funcionaria. */
+@custom-variant dark (&:where(.dark, .dark *));

@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { AgileProvider, useAgile } from './context/AgileContext';
 import { Navbar } from './components/Navbar';
 import { Sidebar } from './components/Sidebar';
@@ -23,6 +24,8 @@ import { EmailNotificationDrawer } from './components/EmailNotificationDrawer';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { PrivateRoute } from './components/PrivateRoute';
+import { MyTodoView } from './components/MyTodoView';
+import { NotesView } from './components/NotesView';
 
 const AppContent: React.FC = () => {
   const { currentView } = useAgile();
@@ -38,6 +41,10 @@ const AppContent: React.FC = () => {
         return <KanbanBoard />;
       case 'backlog':
         return <BacklogView />;
+      case 'my_todo':
+        return <MyTodoView />;
+      case 'notes':
+        return <NotesView />;
       case 'daily_dashboard':
         return <DailyDashboard />;
       case 'time_tracking':
@@ -82,8 +89,9 @@ const AppContent: React.FC = () => {
 
 export default function App() {
   return (
-    <AuthProvider>
-      <BrowserRouter>
+    <ThemeProvider>
+      <AuthProvider>
+        <BrowserRouter>
         <Routes>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/register" element={<RegisterPage />} />
@@ -100,6 +108,7 @@ export default function App() {
           </Route>
         </Routes>
       </BrowserRouter>
-    </AuthProvider>
+      </AuthProvider>
+    </ThemeProvider>
   );
 }

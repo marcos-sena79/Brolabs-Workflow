@@ -123,7 +123,7 @@ export const BoardSettingsModal: React.FC = () => {
             >
               <div className="flex items-center gap-2 flex-wrap">
                 <span
-                  className="w-3 h-3 rounded-full shrink-0"
+                  className="w-3 h-3 rounded-full shrink-0 ring-1 ring-slate-900/10 dark:ring-white/20"
                   style={{ backgroundColor: col.accentColor }}
                 />
                 <input

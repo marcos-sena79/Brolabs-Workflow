@@ -199,6 +199,8 @@ export interface WebhookLog {
 export type ViewTab =
   | 'kanban'
   | 'backlog'
+  | 'my_todo'
+  | 'notes'
   | 'daily_dashboard'
   | 'time_tracking'
   | 'productivity_reports'
@@ -248,5 +250,61 @@ export interface TaskAttachment {
   originalName: string;
   mimeType: string;
   sizeBytes: number;
+  createdAt: string;
+}
+
+// --- To-Do do dia (item 2.4) ---
+
+export interface DailyTodo {
+  id: string;
+  memberId: string;
+  boardId: string | null;
+  title: string;
+  done: boolean;
+  dueDate: string; // YYYY-MM-DD
+  sourceTaskId: string | null;
+  position: number;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+// Tarefa sugerida para virar To-Do (vencendo hoje / atrasadas)
+export interface TodoSuggestion {
+  id: string;
+  key: string;
+  title: string;
+  boardId: string;
+  boardKey: string;
+  priority: string;
+  dueDate: string;
+  statusId: string;
+  statusTitle: string;
+  isOverdue: boolean;
+}
+
+// --- Notas + IA (item 4.1) ---
+
+export interface Note {
+  id: string;
+  boardId: string;
+  memberId: string;
+  authorName: string;
+  title: string;
+  content: string;
+  pinned: boolean;
+  aiGenerated: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type NoteAiAction = 'summarize' | 'expand' | 'action_items';
+
+export interface AiUsage {
+  id: number;
+  memberId: string | null;
+  action: string;
+  inputChars: number | null;
+  outputChars: number | null;
+  status: 'ok' | 'error' | 'rate_limited';
   createdAt: string;
 }

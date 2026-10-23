@@ -334,7 +334,7 @@ export const KanbanBoard: React.FC = () => {
                 <div className="p-3 border-b border-slate-200/70 dark:border-slate-800 flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <span
-                      className="w-2.5 h-2.5 rounded-full"
+                      className="w-2.5 h-2.5 rounded-full ring-1 ring-slate-900/10 dark:ring-white/20"
                       style={{ backgroundColor: column.accentColor }}
                     />
                     <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-slate-200">

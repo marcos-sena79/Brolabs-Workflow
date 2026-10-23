@@ -38,6 +38,13 @@ import {
   boardMemberPatchSchema,
   emailTestSchema,
   memberPreferencesSchema,
+  todoCreateSchema,
+  todoUpdateSchema,
+  todoListQuerySchema,
+  noteCreateSchema,
+  noteUpdateSchema,
+  noteAiSchema,
+  noteFromSprintSchema,
 } from './src/server/validation';
 import {
   resolvePermissions,
@@ -67,6 +74,16 @@ import {
   nextAttemptDate,
 } from './src/server/email/sender';
 import { renderTestEmail } from './src/server/email/templates';
+import {
+  aiProvider,
+  aiConfigured,
+  aiModel,
+  checkAiRateLimit,
+  logAiUsage,
+  runAi,
+  AiUnavailableError,
+  AiFailedError,
+} from './src/server/ai/provider';
 
 dotenv.config();
 
@@ -2122,6 +2139,473 @@ app.delete('/api/boards/:id/members/:memberId', authenticateToken, async (req, r
   } catch (error: any) {
     console.error('Error removing board member:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------- TO-DO DO DIA (item 2.4) ---------------------- //
+
+const TODO_MAX_PER_DAY = 200;
+
+function mapDbTodo(row: any) {
+  const d = row.due_date;
+  return {
+    id: row.id,
+    memberId: row.member_id,
+    boardId: row.board_id ?? null,
+    title: row.title,
+    done: row.done,
+    dueDate: d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10),
+    sourceTaskId: row.source_task_id ?? null,
+    position: row.position,
+    createdAt: row.created_at,
+    completedAt: row.completed_at ?? null,
+  };
+}
+
+async function findOwnedTodo(id: string, memberId: string): Promise<any | null> {
+  const r = await query('SELECT * FROM daily_todos WHERE id = $1 AND member_id = $2', [id, memberId]);
+  return r.rows.length > 0 ? r.rows[0] : null;
+}
+
+// Sugestões: tarefas do membro com due_date <= hoje, não arquivadas, status != done
+async function buildTodoSuggestions(memberId: string, today: string): Promise<any[]> {
+  const boardsRes = await query(
+    `SELECT b.id, b.key, b.columns FROM boards b
+     JOIN board_members bm ON bm.board_id = b.id AND bm.member_id = $1`,
+    [memberId]
+  );
+  const boardIds = boardsRes.rows.map((b) => b.id);
+  if (boardIds.length === 0) return [];
+
+  const tasksRes = await query(
+    `SELECT * FROM tasks
+     WHERE assignee_id = $1 AND archived_at IS NULL
+       AND due_date IS NOT NULL AND due_date <> ''
+       AND LEFT(due_date, 10) <= $2
+     ORDER BY due_date ASC LIMIT 25`,
+    [memberId, today]
+  );
+  if (tasksRes.rows.length === 0) return [];
+
+  const linkedRes = await query(
+    `SELECT source_task_id FROM daily_todos
+     WHERE member_id = $1 AND source_task_id IS NOT NULL`,
+    [memberId]
+  );
+  const linked = new Set(linkedRes.rows.map((r) => r.source_task_id));
+
+  const boardMeta = new Map<string, { key: string; doneIds: Set<string>; title: Map<string, string> }>();
+  for (const b of boardsRes.rows) {
+    const cols: any[] = safeJson(b.columns, []);
+    const doneIds = new Set<string>(
+      cols.filter((c) => c.isDone).map((c) => String(c.id))
+    );
+    const title = new Map<string, string>(
+      cols.map((c) => [String(c.id), String(c.title || '')])
+    );
+    boardMeta.set(b.id, { key: b.key, doneIds, title });
+  }
+
+  return tasksRes.rows
+    .filter((t) => !linked.has(t.id))
+    .map((t) => {
+      const meta = boardMeta.get(t.board_id);
+      const statusTitle = meta?.title.get(String(t.status_id)) || String(t.status_id || '');
+      const due = String(t.due_date || '').slice(0, 10);
+      return {
+        id: t.id,
+        key: t.key,
+        title: t.title,
+        boardId: t.board_id,
+        boardKey: meta?.key || '',
+        priority: t.priority,
+        dueDate: due,
+        statusId: t.status_id,
+        statusTitle,
+        isOverdue: due < today,
+      };
+    })
+    .filter((s) => !boardMeta.get(s.boardId)?.doneIds.has(s.statusId));
+}
+
+app.get('/api/todos', authenticateToken, async (req, res) => {
+  try {
+    const parsed = todoListQuerySchema.safeParse(req.query);
+    if (!parsed.success) return res.status(400).json({ error: 'Data inválida' });
+    const today = parsed.data.date || new Date().toISOString().slice(0, 10);
+
+    const [todosRes, suggested] = await Promise.all([
+      query(
+        `SELECT * FROM daily_todos WHERE member_id = $1 AND due_date = $2::date
+         ORDER BY done ASC, position ASC, created_at ASC LIMIT 500`,
+        [req.memberId, today]
+      ),
+      buildTodoSuggestions(req.memberId!, today),
+    ]);
+
+    res.json({ todos: todosRes.rows.map(mapDbTodo), suggested });
+  } catch (error: any) {
+    console.error('Error listing todos:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/todos', authenticateToken, validateBody(todoCreateSchema), async (req, res) => {
+  try {
+    const { title, dueDate, boardId, sourceTaskId } = req.body;
+    const today = new Date().toISOString().slice(0, 10);
+    const targetDate = dueDate || today;
+
+    const countRes = await query(
+      `SELECT COUNT(*)::int AS n FROM daily_todos WHERE member_id = $1 AND due_date = $2::date`,
+      [req.memberId, targetDate]
+    );
+    if ((countRes.rows[0]?.n ?? 0) >= TODO_MAX_PER_DAY) {
+      return res.status(429).json({ error: `Limite de ${TODO_MAX_PER_DAY} itens por dia atingido` });
+    }
+
+    const posRes = await query(
+      `SELECT COALESCE(MAX(position), -1) + 1 AS p FROM daily_todos WHERE member_id = $1 AND due_date = $2::date`,
+      [req.memberId, targetDate]
+    );
+
+    const id = `todo-${crypto.randomUUID().slice(0, 8)}`;
+    const r = await query(
+      `INSERT INTO daily_todos (id, member_id, board_id, title, due_date, source_task_id, position)
+       VALUES ($1, $2, $3, $4, $5::date, $6, $7) RETURNING *`,
+      [id, req.memberId, boardId ?? null, title, targetDate, sourceTaskId ?? null, posRes.rows[0].p]
+    );
+    res.status(201).json({ todo: mapDbTodo(r.rows[0]) });
+  } catch (error: any) {
+    console.error('Error creating todo:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/todos/:id', authenticateToken, validateBody(todoUpdateSchema), async (req, res) => {
+  try {
+    const row = await findOwnedTodo(req.params.id, req.memberId!);
+    if (!row) return res.status(404).json({ error: 'Item não encontrado' });
+
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let i = 1;
+    const b = req.body;
+    if (b.title !== undefined) { sets.push(`title = $${i++}`); vals.push(b.title); }
+    if (b.done !== undefined) {
+      sets.push(`done = $${i++}`, `completed_at = $${i++}`);
+      vals.push(b.done, b.done ? new Date() : null);
+    }
+    if (b.dueDate !== undefined) { sets.push(`due_date = $${i++}::date`); vals.push(b.dueDate); }
+    if (b.position !== undefined) { sets.push(`position = $${i++}`); vals.push(b.position); }
+    vals.push(req.params.id, req.memberId);
+
+    const r = await query(
+      `UPDATE daily_todos SET ${sets.join(', ')} WHERE id = $${i++} AND member_id = $${i} RETURNING *`,
+      vals
+    );
+    res.json({ todo: mapDbTodo(r.rows[0]) });
+  } catch (error: any) {
+    console.error('Error updating todo:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/todos/:id', authenticateToken, async (req, res) => {
+  try {
+    const r = await query('DELETE FROM daily_todos WHERE id = $1 AND member_id = $2', [
+      req.params.id,
+      req.memberId,
+    ]);
+    if (r.rowCount === 0) return res.status(404).json({ error: 'Item não encontrado' });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error deleting todo:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/todos/from-task/:taskId', authenticateToken, async (req, res) => {
+  try {
+    const taskId = req.params.taskId;
+    const today = new Date().toISOString().slice(0, 10);
+
+    const taskRes = await query(
+      `SELECT t.* FROM tasks t
+       JOIN board_members bm ON bm.board_id = t.board_id AND bm.member_id = $2
+       WHERE t.id = $1`,
+      [taskId, req.memberId]
+    );
+    if (taskRes.rows.length === 0) return res.status(404).json({ error: 'Tarefa não encontrada' });
+    const t = taskRes.rows[0];
+
+    const dup = await query(
+      'SELECT 1 FROM daily_todos WHERE member_id = $1 AND source_task_id = $2',
+      [req.memberId, taskId]
+    );
+    if (dup.rows.length > 0) return res.status(409).json({ error: 'Tarefa já está na sua To-Do' });
+
+    const countRes = await query(
+      `SELECT COUNT(*)::int AS n FROM daily_todos WHERE member_id = $1 AND due_date = $2::date`,
+      [req.memberId, today]
+    );
+    if ((countRes.rows[0]?.n ?? 0) >= TODO_MAX_PER_DAY) {
+      return res.status(429).json({ error: `Limite de ${TODO_MAX_PER_DAY} itens por dia atingido` });
+    }
+
+    const posRes = await query(
+      `SELECT COALESCE(MAX(position), -1) + 1 AS p FROM daily_todos WHERE member_id = $1 AND due_date = $2::date`,
+      [req.memberId, today]
+    );
+    const due = t.due_date ? String(t.due_date).slice(0, 10) : today;
+
+    const id = `todo-${crypto.randomUUID().slice(0, 8)}`;
+    const r = await query(
+      `INSERT INTO daily_todos (id, member_id, board_id, title, due_date, source_task_id, position)
+       VALUES ($1, $2, $3, $4, $5::date, $6, $7) RETURNING *`,
+      [id, req.memberId, t.board_id, t.title, due, taskId, posRes.rows[0].p]
+    );
+    res.status(201).json({ todo: mapDbTodo(r.rows[0]) });
+  } catch (error: any) {
+    console.error('Error creating todo from task:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------- NOTAS + IA (item 4.1) ---------------------- //
+
+function mapDbNote(row: any) {
+  return {
+    id: row.id,
+    boardId: row.board_id,
+    memberId: row.member_id,
+    authorName: row.author_name || '',
+    title: row.title,
+    content: row.content,
+    pinned: row.pinned,
+    aiGenerated: row.ai_generated,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+async function loadNoteWithAccess(id: string, memberId: string) {
+  const r = await query('SELECT * FROM notes WHERE id = $1', [id]);
+  if (r.rows.length === 0) return null;
+  const eff = await resolvePermissions(memberId, r.rows[0].board_id);
+  return { note: r.rows[0], eff };
+}
+
+app.get('/api/notes', authenticateToken, async (req, res) => {
+  try {
+    const boardId = typeof req.query.boardId === 'string' ? req.query.boardId : '';
+    if (!boardId) return res.status(400).json({ error: 'boardId obrigatório' });
+    const eff = await resolvePermissions(req.memberId!, boardId);
+    if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+
+    const r = await query(
+      `SELECT n.*, m.name AS author_name FROM notes n
+       LEFT JOIN members m ON m.id = n.member_id
+       WHERE n.board_id = $1
+       ORDER BY n.pinned DESC, n.updated_at DESC LIMIT 300`,
+      [boardId]
+    );
+    res.json({ notes: r.rows.map(mapDbNote) });
+  } catch (error: any) {
+    console.error('Error listing notes:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/notes', authenticateToken, validateBody(noteCreateSchema), async (req, res) => {
+  try {
+    const { boardId, title, content } = req.body;
+    const eff = await resolvePermissions(req.memberId!, boardId);
+    if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+    if (eff.role === 'viewer') return res.status(403).json({ error: 'Sem permissão para criar notas' });
+
+    const id = `note-${crypto.randomUUID().slice(0, 8)}`;
+    const r = await query(
+      `INSERT INTO notes (id, board_id, member_id, title, content)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [id, boardId, req.memberId, title || 'Sem título', content || '']
+    );
+    res.status(201).json({ note: mapDbNote(r.rows[0]) });
+  } catch (error: any) {
+    console.error('Error creating note:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.patch('/api/notes/:id', authenticateToken, validateBody(noteUpdateSchema), async (req, res) => {
+  try {
+    const loaded = await loadNoteWithAccess(req.params.id, req.memberId!);
+    if (!loaded || !loaded.eff) return res.status(404).json({ error: 'Nota não encontrada' });
+    const { note, eff } = loaded;
+    const isAuthor = note.member_id === req.memberId;
+    if (!isAuthor && !eff.canManageBoard) {
+      return res.status(403).json({ error: 'Sem permissão para editar esta nota' });
+    }
+
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let i = 1;
+    const b = req.body;
+    if (b.title !== undefined) { sets.push(`title = $${i++}`); vals.push(b.title); }
+    if (b.content !== undefined) { sets.push(`content = $${i++}`); vals.push(b.content); }
+    if (b.pinned !== undefined) { sets.push(`pinned = $${i++}`); vals.push(b.pinned); }
+    vals.push(req.params.id);
+
+    const r = await query(
+      `UPDATE notes SET ${sets.join(', ')}, updated_at = now() WHERE id = $${i} RETURNING *`,
+      vals
+    );
+    res.json({ note: mapDbNote(r.rows[0]) });
+  } catch (error: any) {
+    console.error('Error updating note:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/notes/:id', authenticateToken, async (req, res) => {
+  try {
+    const loaded = await loadNoteWithAccess(req.params.id, req.memberId!);
+    if (!loaded || !loaded.eff) return res.status(404).json({ error: 'Nota não encontrada' });
+    const { note, eff } = loaded;
+    if (note.member_id !== req.memberId && !eff.canManageBoard) {
+      return res.status(403).json({ error: 'Sem permissão para excluir esta nota' });
+    }
+    await query('DELETE FROM notes WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error deleting note:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Ações de IA sobre uma nota — NÃO grava; o cliente decide substituir/inserir
+app.post('/api/notes/:id/ai', authenticateToken, validateBody(noteAiSchema), async (req, res) => {
+  const { action } = req.body;
+  const memberId = req.memberId!;
+  let inputChars = 0;
+  try {
+    const loaded = await loadNoteWithAccess(req.params.id, memberId);
+    if (!loaded || !loaded.eff) return res.status(404).json({ error: 'Nota não encontrada' });
+    if (loaded.eff.role === 'viewer') {
+      return res.status(403).json({ error: 'Sem permissão para executar IA nesta nota' });
+    }
+    const note = loaded.note;
+    if (!note.content.trim()) return res.status(400).json({ error: 'Nota vazia' });
+
+    if (!aiConfigured()) {
+      await logAiUsage(memberId, action, note.content.length, 0, 'error');
+      return res.status(503).json({ error: 'IA não configurada', unavailable: true });
+    }
+
+    const retryAfter = await checkAiRateLimit(memberId);
+    if (retryAfter) {
+      await logAiUsage(memberId, action, note.content.length, 0, 'rate_limited');
+      const minutes = Math.max(1, Math.ceil((retryAfter.getTime() - Date.now()) / 60000));
+      return res
+        .status(429)
+        .json({ error: `Limite de 20 usos/h atingido. Tente em ${minutes} min`, retryAfterMinutes: minutes });
+    }
+
+    const instructions: Record<string, string> = {
+      summarize: 'Resuma o conteúdo abaixo em markdown conciso.',
+      expand: 'Expanda o conteúdo abaixo mantendo o mesmo tópico e adicionando detalhes úteis.',
+      action_items: 'Extraia itens de ação (checkboxes markdown) do conteúdo abaixo, com responsável quando mencionado.',
+    };
+    inputChars = note.content.length;
+    const prompt = `${instructions[action]}\n\n<<<NOTA>>>\n${note.content.slice(0, 20000)}\n<<<END>>>`;
+    const output = await runAi(prompt);
+
+    await logAiUsage(memberId, action, inputChars, output.length, 'ok');
+    res.json({
+      content: output,
+      usage: { action, inputChars, outputChars: output.length, provider: aiProvider(), model: aiModel() },
+    });
+  } catch (error: any) {
+    const status = error instanceof AiUnavailableError ? 503 : 502;
+    await logAiUsage(memberId, action, inputChars, 0, 'error').catch(() => {});
+    console.error('Note AI action failed:', error);
+    res.status(status).json({ error: error.message || 'Falha na IA' });
+  }
+});
+
+// Gerar nota a partir das tasks da sprint ativa do board
+app.post('/api/notes/ai/from-sprint', authenticateToken, validateBody(noteFromSprintSchema), async (req, res) => {
+  const { boardId } = req.body;
+  const memberId = req.memberId!;
+  let inputChars = 0;
+  try {
+    const eff = await resolvePermissions(memberId, boardId);
+    if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+    if (eff.role === 'viewer') {
+      return res.status(403).json({ error: 'Sem permissão para criar notas' });
+    }
+
+    if (!aiConfigured()) {
+      await logAiUsage(memberId, 'from_sprint', 0, 0, 'error');
+      return res.status(503).json({ error: 'IA não configurada', unavailable: true });
+    }
+
+    const retryAfter = await checkAiRateLimit(memberId);
+    if (retryAfter) {
+      await logAiUsage(memberId, 'from_sprint', 0, 0, 'rate_limited');
+      const minutes = Math.max(1, Math.ceil((retryAfter.getTime() - Date.now()) / 60000));
+      return res
+        .status(429)
+        .json({ error: `Limite de 20 usos/h atingido. Tente em ${minutes} min`, retryAfterMinutes: minutes });
+    }
+
+    const boardRes = await query('SELECT * FROM boards WHERE id = $1', [boardId]);
+    if (boardRes.rows.length === 0) return res.status(404).json({ error: 'Quadro não encontrado' });
+    const board = boardRes.rows[0];
+
+    const tasksRes = await query(
+      `SELECT t.*, m.name AS assignee_name FROM tasks t
+       LEFT JOIN members m ON m.id = t.assignee_id
+       WHERE t.board_id = $1 AND t.archived_at IS NULL
+       ORDER BY t.created_at DESC LIMIT 50`,
+      [boardId]
+    );
+
+    const statusTitle = new Map(
+      safeJson(board.columns, []).map((c: any) => [String(c.id), String(c.title || '')])
+    );
+
+    const lines = tasksRes.rows.map(
+      (t) =>
+        `- ${t.key} | ${String(t.title).slice(0, 120)} | status: ${statusTitle.get(String(t.status_id)) || t.status_id} | prioridade: ${t.priority} | vence: ${t.due_date ? String(t.due_date).slice(0, 10) : '-'} | pontos: ${t.story_points ?? '-'} | responsável: ${t.assignee_name || '-'}`
+    );
+    const context = lines.join('\n');
+    inputChars = context.length;
+
+    const prompt = `Gere um resumo executivo da sprint em markdown (pt-BR) do quadro "${board.name}".
+Inclua seções: Visão geral, Em andamento, Atrasados/riscos, Concluídos.
+Não invente dados. Use apenas o contexto.
+
+<<<CONTEXTO>>>
+${context}
+<<<END>>>`;
+
+    const output = await runAi(prompt);
+
+    const id = `note-${crypto.randomUUID().slice(0, 8)}`;
+    const r = await query(
+      `INSERT INTO notes (id, board_id, member_id, title, content, ai_generated)
+       VALUES ($1, $2, $3, $4, $5, true) RETURNING *`,
+      [id, boardId, memberId, `Resumo da sprint — ${board.name}`, output]
+    );
+
+    await logAiUsage(memberId, 'from_sprint', inputChars, output.length, 'ok');
+    res.status(201).json({ note: mapDbNote(r.rows[0]) });
+  } catch (error: any) {
+    const status = error instanceof AiUnavailableError ? 503 : 502;
+    await logAiUsage(memberId, 'from_sprint', inputChars, 0, 'error').catch(() => {});
+    console.error('From-sprint note failed:', error);
+    res.status(status).json({ error: error.message || 'Falha na IA' });
   }
 });
 
