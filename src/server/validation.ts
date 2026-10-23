@@ -164,3 +164,38 @@ export const emailSettingsSchema = z
     notifyReporterOnDone: z.boolean().optional(),
   })
   .passthrough();
+
+// --- Task attachments (item 2.1) ---
+
+export const attachmentUploadSchema = z.object({
+  filename: z.string().trim().min(1).max(255),
+  mimeType: z.string().trim().min(1).max(150),
+  sizeBytes: z.number().int().min(1),
+});
+
+export const attachmentConfirmSchema = z.object({
+  attachmentId: z.string().trim().min(1).max(100),
+  filename: z.string().trim().min(1).max(255),
+  mimeType: z.string().trim().min(1).max(150),
+  sizeBytes: z.number().int().min(1),
+});
+
+// --- Board members / permissões (item 5.1) ---
+
+const boardRoleSchema = z.enum(['owner', 'editor', 'viewer']);
+const permissionsOverrideSchema = z.record(z.boolean());
+
+export const boardMemberInviteSchema = z.object({
+  email: emailSchema,
+  role: boardRoleSchema.optional(),
+  permissions: permissionsOverrideSchema.optional(),
+});
+
+export const boardMemberPatchSchema = z
+  .object({
+    role: boardRoleSchema.optional(),
+    permissions: permissionsOverrideSchema.optional(),
+  })
+  .refine((v) => v.role !== undefined || v.permissions !== undefined, {
+    message: 'Informe role ou permissions',
+  });

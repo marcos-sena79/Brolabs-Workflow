@@ -31,6 +31,7 @@ export const KanbanBoard: React.FC = () => {
     setIsCreateModalOpen,
     createTask,
     moveTask,
+    can,
   } = useAgile();
 
   // Column quick add state
@@ -111,10 +112,13 @@ export const KanbanBoard: React.FC = () => {
     setDragOverColumnId(null);
   };
 
+  const canChangeStatus = can('canChangeStatus');
+  const canCreateTask = can('canCreateTask');
+
   const handleDrop = (e: React.DragEvent, columnId: string) => {
     e.preventDefault();
     const taskId = e.dataTransfer.getData('text/plain') || draggedTaskId;
-    if (taskId) {
+    if (taskId && canChangeStatus) {
       moveTask(taskId, columnId);
     }
     setDraggedTaskId(null);
@@ -357,13 +361,15 @@ export const KanbanBoard: React.FC = () => {
                         <AlertTriangle className="w-3.5 h-3.5" />
                       </span>
                     )}
-                    <button
-                      onClick={() => setQuickAddColumnId(column.id)}
-                      className="p-1 hover:bg-slate-300/70 dark:hover:bg-slate-800 rounded text-slate-500 hover:text-slate-800 transition-colors"
-                      title="Adicionar tarefa rápida nesta coluna"
-                    >
-                      <Plus className="w-3.5 h-3.5" />
-                    </button>
+                    {canCreateTask && (
+                      <button
+                        onClick={() => setQuickAddColumnId(column.id)}
+                        className="p-1 hover:bg-slate-300/70 dark:hover:bg-slate-800 rounded text-slate-500 hover:text-slate-800 transition-colors"
+                        title="Adicionar tarefa rápida nesta coluna"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -372,9 +378,9 @@ export const KanbanBoard: React.FC = () => {
                   {columnTasks.map((task) => (
                     <div
                       key={task.id}
-                      draggable
+                      draggable={canChangeStatus}
                       onDragStart={(e) => handleDragStart(e, task.id)}
-                      className="cursor-grab active:cursor-grabbing"
+                      className={canChangeStatus ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'}
                     >
                       <TaskCard
                         task={task}
@@ -383,7 +389,7 @@ export const KanbanBoard: React.FC = () => {
                     </div>
                   ))}
 
-                  {columnTasks.length === 0 && (
+                  {columnTasks.length === 0 && canCreateTask && (
                     <div className="py-8 text-center border-2 border-dashed border-slate-300/60 dark:border-slate-800 rounded-lg">
                       <p className="text-[11px] text-slate-400">Nenhuma tarefa nesta coluna</p>
                       <button
@@ -392,6 +398,11 @@ export const KanbanBoard: React.FC = () => {
                       >
                         + Criar aqui
                       </button>
+                    </div>
+                  )}
+                  {columnTasks.length === 0 && !canCreateTask && (
+                    <div className="py-8 text-center border-2 border-dashed border-slate-300/60 dark:border-slate-800 rounded-lg">
+                      <p className="text-[11px] text-slate-400">Nenhuma tarefa nesta coluna</p>
                     </div>
                   )}
 
@@ -435,15 +446,17 @@ export const KanbanBoard: React.FC = () => {
                 </div>
 
                 {/* Column Footer: Quick add button */}
-                <div className="p-2 border-t border-slate-200/50 dark:border-slate-800/60">
-                  <button
-                    onClick={() => setQuickAddColumnId(column.id)}
-                    className="w-full py-1.5 px-2 flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-300/50 dark:hover:bg-slate-800/60 rounded-md transition-colors"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Adicionar Tarefa</span>
-                  </button>
-                </div>
+                {canCreateTask && (
+                  <div className="p-2 border-t border-slate-200/50 dark:border-slate-800/60">
+                    <button
+                      onClick={() => setQuickAddColumnId(column.id)}
+                      className="w-full py-1.5 px-2 flex items-center justify-center gap-1.5 text-xs font-semibold text-slate-500 dark:text-slate-400 hover:bg-slate-300/50 dark:hover:bg-slate-800/60 rounded-md transition-colors"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Adicionar Tarefa</span>
+                    </button>
+                  </div>
+                )}
               </div>
             );
           })}

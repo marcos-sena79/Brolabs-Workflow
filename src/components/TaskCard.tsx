@@ -34,6 +34,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
     startTimer,
     pauseTimer,
     archiveTask,
+    can,
   } = useAgile();
 
   const assignee = members.find((m) => m.id === task.assigneeId);
@@ -160,13 +161,15 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
           </button>
 
           {/* Quick Archive Button */}
-          <button
-            onClick={handleArchiveClick}
-            title="Arquivar tarefa"
-            className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-opacity"
-          >
-            <Archive className="w-3 h-3" />
-          </button>
+          {can('canEditTask', task.boardId) && (
+            <button
+              onClick={handleArchiveClick}
+              title="Arquivar tarefa"
+              className="p-1 rounded text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700 opacity-0 group-hover:opacity-100 transition-opacity"
+            >
+              <Archive className="w-3 h-3" />
+            </button>
+          )}
 
           <PriorityIcon priority={task.priority} className="w-3.5 h-3.5" />
         </div>

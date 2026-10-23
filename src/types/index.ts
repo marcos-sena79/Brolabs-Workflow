@@ -195,3 +195,49 @@ export type ViewTab =
   | 'productivity_reports'
   | 'member_performance'
   | 'integrations';
+
+// --- Permissões por board (item 5.1) ---
+
+export type BoardRole = 'owner' | 'editor' | 'viewer';
+
+export type PermissionFlag =
+  | 'canCreateTask'
+  | 'canEditTask'
+  | 'canChangeStatus'
+  | 'canAddComment'
+  | 'canLogWork'
+  | 'canInviteMember'
+  | 'canManageMembers'
+  | 'canManageBoard'
+  | 'canDeleteTask';
+
+export interface BoardPermissions extends Record<PermissionFlag, boolean> {
+  role: BoardRole;
+  isAdmin: boolean;
+  hasBoardAccess: boolean;
+}
+
+export interface BoardMemberInfo {
+  memberId: string;
+  name: string;
+  email: string;
+  avatar: string;
+  jobTitle: string;
+  active: boolean;
+  role: BoardRole;
+  permissions: Partial<Record<PermissionFlag, boolean>>;
+  joinedAt: string;
+}
+
+// --- Anexos de tarefas (item 2.1) ---
+
+export interface TaskAttachment {
+  id: string;
+  taskId: string;
+  boardId: string;
+  uploaderId: string;
+  originalName: string;
+  mimeType: string;
+  sizeBytes: number;
+  createdAt: string;
+}

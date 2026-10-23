@@ -8,6 +8,11 @@ import {
   EmailNotification,
   EmailSettings,
   IntegrationPlatform,
+  TaskAttachment,
+  BoardMemberInfo,
+  BoardPermissions,
+  BoardRole,
+  PermissionFlag,
 } from '../types';
 
 export interface InitialStateResponse {
@@ -21,6 +26,7 @@ export interface InitialStateResponse {
   emailNotifications: EmailNotification[];
   currentBoardId: string;
   currentUserId: string;
+  myPermissions?: Record<string, BoardPermissions>;
 }
 
 export interface HealthResponse {
@@ -267,6 +273,151 @@ export const api = {
     if (!res.ok) throw new Error('Falha ao atualizar membro no NeonDB');
     const data = await res.json();
     return data.member;
+  },
+
+  // Task attachments (item 2.1)
+  async getTaskAttachments(taskId: string): Promise<TaskAttachment[]> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/attachments`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao carregar anexos');
+    const data = await res.json();
+    return data.attachments || [];
+  },
+
+  /** Upload direto via URL presigned: upload-url → PUT no storage → confirm. */
+  async uploadTaskAttachment(
+    taskId: string,
+    file: File,
+    onProgress?: (pct: number) => void
+  ): Promise<TaskAttachment> {
+    const urlRes = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/attachments/upload-url`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        filename: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        sizeBytes: file.size,
+      }),
+    });
+    if (!urlRes.ok) {
+      const err = await urlRes.json().catch(() => ({}));
+      throw Object.assign(new Error(err?.error || 'Falha ao solicitar URL de upload'), {
+        status: urlRes.status,
+      });
+    }
+    const { attachmentId, uploadUrl } = await urlRes.json();
+
+    await new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', uploadUrl);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
+        };
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve();
+        else reject(new Error(`Upload falhou no storage (${xhr.status})`));
+      };
+      xhr.onerror = () => reject(new Error('Falha de rede no upload'));
+      xhr.send(file);
+    });
+
+    const confirmRes = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/attachments/confirm`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        attachmentId,
+        filename: file.name,
+        mimeType: file.type || 'application/octet-stream',
+        sizeBytes: file.size,
+      }),
+    });
+    if (!confirmRes.ok) {
+      const err = await confirmRes.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao confirmar anexo');
+    }
+    const data = await confirmRes.json();
+    return data.attachment;
+  },
+
+  async getTaskAttachmentUrl(taskId: string, attachmentId: string): Promise<string> {
+    const res = await fetch(
+      `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}/url`,
+      { headers: getAuthHeaders() }
+    );
+    if (!res.ok) throw new Error('Falha ao gerar link do anexo');
+    const data = await res.json();
+    return data.url;
+  },
+
+  async deleteTaskAttachment(taskId: string, attachmentId: string): Promise<void> {
+    const res = await fetch(
+      `/api/tasks/${encodeURIComponent(taskId)}/attachments/${encodeURIComponent(attachmentId)}`,
+      { method: 'DELETE', headers: getAuthHeaders() }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao remover anexo');
+    }
+  },
+
+  // Board members / permissões (item 5.1)
+  async getBoardMembers(boardId: string): Promise<{ members: BoardMemberInfo[]; myRole?: BoardRole }> {
+    const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/members`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao carregar membros do quadro');
+    return res.json();
+  },
+
+  async inviteBoardMember(
+    boardId: string,
+    data: { email: string; role?: BoardRole; permissions?: Partial<Record<PermissionFlag, boolean>> }
+  ): Promise<BoardMemberInfo> {
+    const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/members`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao convidar membro');
+    }
+    const body = await res.json();
+    return body.member;
+  },
+
+  async updateBoardMember(
+    boardId: string,
+    memberId: string,
+    data: { role?: BoardRole; permissions?: Partial<Record<PermissionFlag, boolean>> }
+  ): Promise<void> {
+    const res = await fetch(
+      `/api/boards/${encodeURIComponent(boardId)}/members/${encodeURIComponent(memberId)}`,
+      {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(data),
+      }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao atualizar membro do quadro');
+    }
+  },
+
+  async removeBoardMember(boardId: string, memberId: string): Promise<void> {
+    const res = await fetch(
+      `/api/boards/${encodeURIComponent(boardId)}/members/${encodeURIComponent(memberId)}`,
+      { method: 'DELETE', headers: getAuthHeaders() }
+    );
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err?.error || 'Falha ao remover membro do quadro');
+    }
   },
 
   // Activities

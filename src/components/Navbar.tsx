@@ -58,6 +58,7 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
     refetchDbData,
     resetToDemoData,
     setIsBoardSettingsOpen,
+    can,
   } = useAgile();
 
   const { member: authMember, isAuthenticated, login, logout, isLoading: authLoading } = useAuth();
@@ -189,14 +190,16 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
         </div>
 
         {/* Board settings (columns) trigger */}
-        <button
-          onClick={() => setIsBoardSettingsOpen(true)}
-          className="hidden sm:flex p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors shrink-0"
-          title="Configurar colunas do quadro"
-          aria-label="Configurar colunas do quadro"
-        >
-          <Settings className="w-4 h-4" />
-        </button>
+        {can('canManageBoard') && (
+          <button
+            onClick={() => setIsBoardSettingsOpen(true)}
+            className="hidden sm:flex p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors shrink-0"
+            title="Configurar colunas do quadro"
+            aria-label="Configurar colunas do quadro"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* Center: Search Bar with Hotkey & Command Palette Launcher */}
@@ -435,17 +438,19 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
         )}
 
         {/* + Criar Tarefa CTA */}
-        <button
-          onClick={() => setIsCreateModalOpen(true)}
-          title="Criar Tarefa (Atalho: Pressione 'C')"
-          className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-semibold px-2.5 sm:px-3 py-2 rounded-md shadow-sm transition-colors"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span className="hidden sm:inline">Criar Tarefa</span>
-          <kbd className="hidden sm:inline-block ml-1 px-1 py-0.2 rounded text-[10px] font-mono bg-indigo-700/80 text-indigo-100 border border-indigo-500/40">
-            C
-          </kbd>
-        </button>
+        {can('canCreateTask') && (
+          <button
+            onClick={() => setIsCreateModalOpen(true)}
+            title="Criar Tarefa (Atalho: Pressione 'C')"
+            className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white text-xs font-semibold px-2.5 sm:px-3 py-2 rounded-md shadow-sm transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Criar Tarefa</span>
+            <kbd className="hidden sm:inline-block ml-1 px-1 py-0.2 rounded text-[10px] font-mono bg-indigo-700/80 text-indigo-100 border border-indigo-500/40">
+              C
+            </kbd>
+          </button>
+        )}
       </div>
 
       {/* Modal: Novo Board */}

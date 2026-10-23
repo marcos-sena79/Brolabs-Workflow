@@ -32,6 +32,7 @@ import {
 import { useAgile } from '../context/AgileContext';
 import { IssueType, Priority, Task, DependencyType } from '../types';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
+import { AttachmentSection } from './AttachmentSection';
 import {
   formatHours,
   formatDate,
@@ -65,6 +66,7 @@ export const TaskModal: React.FC = () => {
     startTimer,
     pauseTimer,
     archiveTask,
+    can,
   } = useAgile();
 
   const task = tasks.find((t) => t.id === selectedTaskModalId);
@@ -325,30 +327,38 @@ export const TaskModal: React.FC = () => {
             </button>
 
             {/* Status Dropdown */}
-            <select
-              value={task.statusId}
-              onChange={(e) => moveTask(task.id, e.target.value)}
-              className="text-xs font-semibold px-3 py-1.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 focus:outline-none cursor-pointer"
-            >
-              {currentBoard.columns.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.title}
-                </option>
-              ))}
-            </select>
+            {can('canChangeStatus', task.boardId) ? (
+              <select
+                value={task.statusId}
+                onChange={(e) => moveTask(task.id, e.target.value)}
+                className="text-xs font-semibold px-3 py-1.5 rounded-md bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 focus:outline-none cursor-pointer"
+              >
+                {currentBoard.columns.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.title}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <span className="text-xs font-semibold px-3 py-1.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300">
+                {currentBoard.columns.find((c) => c.id === task.statusId)?.title || task.statusId}
+              </span>
+            )}
 
             {/* Delete button */}
-            <button
-              onClick={() => {
-                if (confirm(`Excluir permanentemente a tarefa ${task.key}?`)) {
-                  deleteTask(task.id);
-                }
-              }}
-              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition-colors"
-              title="Excluir tarefa"
-            >
-              <Trash2 className="w-4 h-4" />
-            </button>
+            {can('canDeleteTask', task.boardId) && (
+              <button
+                onClick={() => {
+                  if (confirm(`Excluir permanentemente a tarefa ${task.key}?`)) {
+                    deleteTask(task.id);
+                  }
+                }}
+                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition-colors"
+                title="Excluir tarefa"
+              >
+                <Trash2 className="w-4 h-4" />
+              </button>
+            )}
 
             {/* Close modal */}
             <button
@@ -533,17 +543,19 @@ export const TaskModal: React.FC = () => {
                             </div>
 
             {/* Archive button */}
-            <button
-              onClick={() => {
-                if (confirm(`Arquivar a tarefa ${task.key}? Ela sairá do quadro ativa.`)) {
-                  archiveTask(task.id).catch(() => {});
-                }
-              }}
-              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
-              title="Arquivar tarefa"
-            >
-              <Archive className="w-4 h-4" />
-            </button>
+            {can('canEditTask', task.boardId) && (
+              <button
+                onClick={() => {
+                  if (confirm(`Arquivar a tarefa ${task.key}? Ela sairá do quadro ativa.`)) {
+                    archiveTask(task.id).catch(() => {});
+                  }
+                }}
+                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded transition-colors"
+                title="Arquivar tarefa"
+              >
+                <Archive className="w-4 h-4" />
+              </button>
+            )}
 
             {/* Delete button */}
                             <button
@@ -1021,6 +1033,8 @@ export const TaskModal: React.FC = () => {
                 )}
               </div>
             </div>
+
+            <AttachmentSection task={task} />
 
             {/* COMENTÁRIOS */}
             <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">

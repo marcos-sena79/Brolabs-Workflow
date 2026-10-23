@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
+import crypto from 'crypto';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import { pool, query } from './src/server/db';
@@ -31,7 +32,31 @@ import {
   columnCreateSchema,
   columnUpdateSchema,
   columnReorderSchema,
+  attachmentUploadSchema,
+  attachmentConfirmSchema,
+  boardMemberInviteSchema,
+  boardMemberPatchSchema,
 } from './src/server/validation';
+import {
+  resolvePermissions,
+  requireBoardPermission,
+  requireBoardAccess,
+  requireAdmin,
+  type EffectivePermissions,
+} from './src/server/permissions';
+import {
+  getStorage,
+  storageBucket,
+  extensionOf,
+  isAllowedExtension,
+  statObject,
+  removeObject,
+  listObjects,
+  ATTACHMENT_MAX_BYTES,
+  ATTACHMENT_MAX_PER_TASK,
+  SIGNED_UPLOAD_TTL_SEC,
+  SIGNED_GET_TTL_SEC,
+} from './src/server/storage';
 
 dotenv.config();
 
@@ -274,11 +299,35 @@ app.get('/api/health', async (req, res) => {
 // Full initial state for fast bootstrap
 app.get('/api/initial-state', authenticateToken, async (req, res) => {
   try {
+    const memberRes = await query('SELECT system_role FROM members WHERE id = $1', [req.memberId]);
+    const isAdmin = memberRes.rows[0]?.system_role === 'admin';
+
+    let boardsQuery;
+    let tasksQuery;
+    if (isAdmin) {
+      boardsQuery = query('SELECT * FROM boards ORDER BY created_at ASC');
+      tasksQuery = query('SELECT * FROM tasks WHERE archived_at IS NULL ORDER BY created_at DESC');
+    } else {
+      boardsQuery = query(
+        `SELECT b.* FROM boards b
+         INNER JOIN board_members bm ON bm.board_id = b.id AND bm.member_id = $1
+         ORDER BY b.created_at ASC`,
+        [req.memberId]
+      );
+      tasksQuery = query(
+        `SELECT t.* FROM tasks t
+         INNER JOIN board_members bm ON bm.board_id = t.board_id AND bm.member_id = $1
+         WHERE t.archived_at IS NULL
+         ORDER BY t.created_at DESC`,
+        [req.memberId]
+      );
+    }
+
     const [boardsRes, membersRes, tasksRes, activitiesRes, integrationsRes, webhooksRes, emailSettingsRes, emailNotificationsRes, appSettingsRes] =
       await Promise.all([
-        query('SELECT * FROM boards ORDER BY created_at ASC'),
+        boardsQuery,
         query('SELECT * FROM members ORDER BY name ASC'),
-        query('SELECT * FROM tasks WHERE archived_at IS NULL ORDER BY created_at DESC'),
+        tasksQuery,
         query('SELECT * FROM activity_logs ORDER BY timestamp DESC LIMIT 100'),
         query('SELECT * FROM integrations ORDER BY id ASC'),
         query('SELECT * FROM webhook_logs ORDER BY timestamp DESC LIMIT 50'),
@@ -294,6 +343,12 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
     const integrations = integrationsRes.rows.map(mapDbIntegration);
     const webhookLogs = webhooksRes.rows.map(mapDbWebhookLog);
     const emailNotifications = emailNotificationsRes.rows.map(mapDbEmailNotification);
+
+    const myPermissions: Record<string, EffectivePermissions> = {};
+    for (const board of boards) {
+      const eff = await resolvePermissions(req.memberId!, board.id);
+      if (eff) myPermissions[board.id] = eff;
+    }
 
     let emailSettings = {
       enabled: true,
@@ -320,8 +375,14 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
       appSettingsMap[row.key] = safeJsonOrRaw(row.value);
     }
 
-    const currentBoardId = appSettingsMap['current_board_id'] || (boards[0] ? boards[0].id : '');
-    const currentUserId = appSettingsMap['current_user_id'] || (members[0] ? members[0].id : '');
+    const storedBoardId = appSettingsMap['current_board_id'];
+    const currentBoardId =
+      storedBoardId && myPermissions[storedBoardId]
+        ? storedBoardId
+        : boards[0]
+          ? boards[0].id
+          : '';
+    const currentUserId = req.memberId || '';
 
     res.json({
       boards,
@@ -334,6 +395,7 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
       emailNotifications,
       currentBoardId,
       currentUserId,
+      myPermissions,
     });
   } catch (error: any) {
     console.error('Error fetching initial state:', error);
@@ -341,10 +403,11 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
   }
 });
 
-// Reset / Seed database (destructivo: exige auth + confirmação explícita)
+// Reset / Seed database (destructivo: exige auth + admin + confirmação explícita)
 app.post(
   '/api/reset-database',
   authenticateToken,
+  requireAdmin(),
   validateBody(resetDatabaseSchema),
   async (req, res) => {
     try {
@@ -485,7 +548,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
 
 // --- TASKS ENDPOINTS --- //
 
-app.post('/api/tasks', authenticateToken, validateBody(taskCreateSchema), async (req, res) => {
+app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'), validateBody(taskCreateSchema), async (req, res) => {
   try {
     const t = req.body;
     await query(
@@ -543,6 +606,26 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
     }
 
     const current = mapDbTask(existingRes.rows[0]);
+
+    // Permissões efetivas no board da task (item 5.1)
+    const eff = await resolvePermissions(req.memberId!, current.boardId);
+    if (!eff) {
+      return res.status(403).json({ error: 'Sem acesso a este quadro' });
+    }
+    req.boardPermissions = eff;
+    if (!eff.canEditTask) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canEditTask' });
+    }
+    if (updates.statusId && updates.statusId !== current.statusId && !eff.canChangeStatus) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canChangeStatus' });
+    }
+    if ('worklogs' in updates && !eff.canLogWork) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canLogWork' });
+    }
+    if ('comments' in updates && !eff.canAddComment) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canAddComment' });
+    }
+
     const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
 
     await query(
@@ -588,6 +671,17 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
 app.delete('/api/tasks/:id', authenticateToken, async (req, res) => {
   try {
     const { id } = req.params;
+    const existingRes = await query('SELECT board_id FROM tasks WHERE id = $1', [id]);
+    if (existingRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+    const eff = await resolvePermissions(req.memberId!, existingRes.rows[0].board_id);
+    if (!eff) {
+      return res.status(403).json({ error: 'Sem acesso a este quadro' });
+    }
+    if (!eff.canDeleteTask) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canDeleteTask' });
+    }
     await query('DELETE FROM tasks WHERE id = $1', [id]);
     res.json({ success: true });
   } catch (error: any) {
@@ -610,6 +704,14 @@ app.post('/api/tasks/:id/archive', authenticateToken, async (req, res) => {
     const task = mapDbTask(taskRes.rows[0]);
     if (task.archivedAt) {
       return res.json({ success: true, task });
+    }
+
+    const archiveEff = await resolvePermissions(req.memberId!, task.boardId);
+    if (!archiveEff) {
+      return res.status(403).json({ error: 'Sem acesso a este quadro' });
+    }
+    if (!archiveEff.canEditTask) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canEditTask' });
     }
 
     const boardRes = await query('SELECT * FROM boards WHERE id = $1', [task.boardId]);
@@ -698,6 +800,14 @@ app.post('/api/tasks/:id/unarchive', authenticateToken, async (req, res) => {
       return res.json({ success: true, task });
     }
 
+    const unarchiveEff = await resolvePermissions(req.memberId!, task.boardId);
+    if (!unarchiveEff) {
+      return res.status(403).json({ error: 'Sem acesso a este quadro' });
+    }
+    if (!unarchiveEff.canEditTask) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canEditTask' });
+    }
+
     const boardRes = await query('SELECT * FROM boards WHERE id = $1', [task.boardId]);
     const board = boardRes.rows.length > 0 ? mapDbBoard(boardRes.rows[0]) : null;
     const columnExists = board?.columns?.some((c: any) => c.id === task.statusId);
@@ -715,7 +825,7 @@ app.post('/api/tasks/:id/unarchive', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/api/boards/:id/tasks', authenticateToken, async (req, res) => {
+app.get('/api/boards/:id/tasks', authenticateToken, requireBoardAccess(), async (req, res) => {
   try {
     const { id } = req.params;
     const archivedOnly = req.query.archived === 'true';
@@ -751,6 +861,12 @@ app.post('/api/boards', authenticateToken, validateBody(boardCreateSchema), asyn
         JSON.stringify(b.epics || []),
       ]
     );
+    // Criador vira owner do board (item 5.1)
+    await query(
+      `INSERT INTO board_members (board_id, member_id, role, permissions)
+       VALUES ($1, $2, 'owner', '{}') ON CONFLICT DO NOTHING`,
+      [b.id, req.memberId]
+    );
     res.status(201).json({ success: true, board: b });
   } catch (error: any) {
     console.error('Error creating board:', error);
@@ -758,7 +874,7 @@ app.post('/api/boards', authenticateToken, validateBody(boardCreateSchema), asyn
   }
 });
 
-app.put('/api/boards/:id', authenticateToken, validateBody(boardUpdateSchema), async (req, res) => {
+app.put('/api/boards/:id', authenticateToken, requireBoardPermission('canManageBoard'), validateBody(boardUpdateSchema), async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -798,7 +914,7 @@ app.put('/api/boards/:id', authenticateToken, validateBody(boardUpdateSchema), a
   }
 });
 
-app.delete('/api/boards/:id', authenticateToken, async (req, res) => {
+app.delete('/api/boards/:id', authenticateToken, requireBoardPermission('canManageBoard'), async (req, res) => {
   try {
     const { id } = req.params;
     await query('DELETE FROM tasks WHERE board_id = $1', [id]);
@@ -847,6 +963,7 @@ async function updateBoardColumnsWithLock(
 app.post(
   '/api/boards/:id/columns',
   authenticateToken,
+  requireBoardPermission('canManageBoard'),
   validateBody(columnCreateSchema),
   async (req, res) => {
     try {
@@ -890,6 +1007,7 @@ app.post(
 app.patch(
   '/api/boards/:id/columns/:columnId',
   authenticateToken,
+  requireBoardPermission('canManageBoard'),
   validateBody(columnUpdateSchema),
   async (req, res) => {
     try {
@@ -942,6 +1060,7 @@ app.patch(
 app.put(
   '/api/boards/:id/columns/reorder',
   authenticateToken,
+  requireBoardPermission('canManageBoard'),
   validateBody(columnReorderSchema),
   async (req, res) => {
     try {
@@ -979,7 +1098,7 @@ app.put(
   }
 );
 
-app.delete('/api/boards/:id/columns/:columnId', authenticateToken, async (req, res) => {
+app.delete('/api/boards/:id/columns/:columnId', authenticateToken, requireBoardPermission('canManageBoard'), async (req, res) => {
   try {
     const { id, columnId } = req.params;
     const reassignTo = req.query.reassignTo as string | undefined;
@@ -1203,7 +1322,7 @@ app.post('/api/activities', authenticateToken, async (req, res) => {
 
 // --- INTEGRATIONS --- //
 
-app.put('/api/integrations/:id', authenticateToken, async (req, res) => {
+app.put('/api/integrations/:id', authenticateToken, requireAdmin(), async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -1244,7 +1363,7 @@ app.put('/api/integrations/:id', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/api/webhooks', authenticateToken, async (req, res) => {
+app.post('/api/webhooks', authenticateToken, requireAdmin(), async (req, res) => {
   try {
     const w = req.body;
     await query(
@@ -1346,6 +1465,443 @@ app.delete('/api/email/notifications', authenticateToken, async (req, res) => {
     await query('DELETE FROM email_notifications');
     res.json({ success: true });
   } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------- TASK ATTACHMENTS (item 2.1) ---------------------- //
+
+function mapDbAttachment(row: any) {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    boardId: row.board_id,
+    uploaderId: row.uploader_id || '',
+    originalName: row.original_name,
+    mimeType: row.mime_type,
+    sizeBytes: row.size_bytes,
+    createdAt: row.created_at,
+  };
+}
+
+async function findTaskRowForAttachment(taskId: string): Promise<any | null> {
+  const r = await query('SELECT * FROM tasks WHERE id = $1', [taskId]);
+  return r.rows.length > 0 ? r.rows[0] : null;
+}
+
+function attachmentPath(boardId: string, taskId: string, attachmentId: string, filename: string): string {
+  return `${boardId}/${taskId}/${attachmentId}.${extensionOf(filename)}`;
+}
+
+app.post(
+  '/api/tasks/:id/attachments/upload-url',
+  authenticateToken,
+  validateBody(attachmentUploadSchema),
+  async (req, res) => {
+    try {
+      const taskRow = await findTaskRowForAttachment(req.params.id);
+      if (!taskRow) return res.status(404).json({ error: 'Task not found' });
+
+      const eff = await resolvePermissions(req.memberId!, taskRow.board_id);
+      if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+      if (!eff.canEditTask) {
+        return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canEditTask' });
+      }
+
+      const { filename, mimeType, sizeBytes } = req.body;
+      if (sizeBytes > ATTACHMENT_MAX_BYTES) {
+        return res.status(413).json({ error: 'Arquivo excede o limite de 10 MB' });
+      }
+      if (!isAllowedExtension(filename)) {
+        return res.status(415).json({
+          error: 'Tipo de arquivo não permitido. Use: png, jpg, jpeg, gif, webp, pdf, csv, txt, zip, md, doc, docx, xls ou xlsx',
+        });
+      }
+      if (mimeType === 'image/svg+xml') {
+        return res.status(415).json({ error: 'SVG não é permitido (risco de XSS)' });
+      }
+
+      const countRes = await query(
+        'SELECT COUNT(*)::int AS n FROM task_attachments WHERE task_id = $1',
+        [req.params.id]
+      );
+      if (countRes.rows[0].n >= ATTACHMENT_MAX_PER_TASK) {
+        return res.status(409).json({ error: `Limite de ${ATTACHMENT_MAX_PER_TASK} anexos por tarefa` });
+      }
+
+      const supabase = getStorage();
+      if (!supabase) {
+        return res.status(503).json({
+          error: 'Storage não configurado. Defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no ambiente.',
+        });
+      }
+
+      const attachmentId = `att-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+      const storagePath = attachmentPath(taskRow.board_id, req.params.id, attachmentId, filename);
+
+      const { data, error } = await supabase.storage
+        .from(storageBucket())
+        .createSignedUploadUrl(storagePath);
+      if (error || !data) {
+        return res.status(500).json({ error: error?.message || 'Falha ao gerar URL de upload' });
+      }
+
+      res.status(201).json({
+        attachmentId,
+        uploadUrl: data.signedUrl,
+        token: data.token,
+      });
+    } catch (error: any) {
+      console.error('Error creating upload url:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.post(
+  '/api/tasks/:id/attachments/confirm',
+  authenticateToken,
+  validateBody(attachmentConfirmSchema),
+  async (req, res) => {
+    try {
+      const taskRow = await findTaskRowForAttachment(req.params.id);
+      if (!taskRow) return res.status(404).json({ error: 'Task not found' });
+
+      const eff = await resolvePermissions(req.memberId!, taskRow.board_id);
+      if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+      if (!eff.canEditTask) {
+        return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canEditTask' });
+      }
+
+      const { attachmentId, filename, mimeType, sizeBytes } = req.body;
+      if (sizeBytes > ATTACHMENT_MAX_BYTES) {
+        return res.status(413).json({ error: 'Arquivo excede o limite de 10 MB' });
+      }
+      if (!isAllowedExtension(filename) || mimeType === 'image/svg+xml') {
+        return res.status(415).json({ error: 'Tipo de arquivo não permitido' });
+      }
+
+      const supabase = getStorage();
+      if (!supabase) {
+        return res.status(503).json({ error: 'Storage não configurado' });
+      }
+
+      const storagePath = attachmentPath(taskRow.board_id, req.params.id, attachmentId, filename);
+      const meta = await statObject(storagePath);
+      if (!meta) {
+        return res.status(422).json({ error: 'Arquivo não encontrado no storage' });
+      }
+
+      const insertRes = await query(
+        `INSERT INTO task_attachments (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING *`,
+        [attachmentId, req.params.id, taskRow.board_id, req.memberId, filename, storagePath, mimeType, sizeBytes]
+      );
+      if (insertRes.rows.length === 0) {
+        return res.status(409).json({ error: 'Anexo já confirmado' });
+      }
+
+      res.status(201).json({ success: true, attachment: mapDbAttachment(insertRes.rows[0]) });
+    } catch (error: any) {
+      console.error('Error confirming attachment:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.get('/api/tasks/:id/attachments', authenticateToken, async (req, res) => {
+  try {
+    const taskRow = await findTaskRowForAttachment(req.params.id);
+    if (!taskRow) return res.status(404).json({ error: 'Task not found' });
+    const eff = await resolvePermissions(req.memberId!, taskRow.board_id);
+    if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+
+    const rows = await query(
+      'SELECT * FROM task_attachments WHERE task_id = $1 ORDER BY created_at DESC',
+      [req.params.id]
+    );
+    res.json({ attachments: rows.rows.map(mapDbAttachment) });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/tasks/:id/attachments/:attId/url', authenticateToken, async (req, res) => {
+  try {
+    const taskRow = await findTaskRowForAttachment(req.params.id);
+    if (!taskRow) return res.status(404).json({ error: 'Task not found' });
+    const eff = await resolvePermissions(req.memberId!, taskRow.board_id);
+    if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+
+    const attRes = await query(
+      'SELECT * FROM task_attachments WHERE id = $1 AND task_id = $2',
+      [req.params.attId, req.params.id]
+    );
+    if (attRes.rows.length === 0) return res.status(404).json({ error: 'Anexo não encontrado' });
+
+    const supabase = getStorage();
+    if (!supabase) return res.status(503).json({ error: 'Storage não configurado' });
+
+    const { data, error } = await supabase.storage
+      .from(storageBucket())
+      .createSignedUrl(attRes.rows[0].storage_path, SIGNED_GET_TTL_SEC);
+    if (error || !data) {
+      return res.status(500).json({ error: error?.message || 'Falha ao gerar URL de download' });
+    }
+    res.json({ url: data.signedUrl, expiresIn: SIGNED_GET_TTL_SEC });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.delete('/api/tasks/:id/attachments/:attId', authenticateToken, async (req, res) => {
+  try {
+    const taskRow = await findTaskRowForAttachment(req.params.id);
+    if (!taskRow) return res.status(404).json({ error: 'Task not found' });
+    const eff = await resolvePermissions(req.memberId!, taskRow.board_id);
+    if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+    if (!eff.canEditTask) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canEditTask' });
+    }
+
+    const attRes = await query(
+      'DELETE FROM task_attachments WHERE id = $1 AND task_id = $2 RETURNING storage_path',
+      [req.params.attId, req.params.id]
+    );
+    if (attRes.rows.length === 0) return res.status(404).json({ error: 'Anexo não encontrado' });
+
+    await removeObject(attRes.rows[0].storage_path);
+    res.json({ success: true });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cron diário: remove objetos do storage com >24h sem row correspondente (upload nunca confirmado).
+// Autenticação: Authorization: Bearer $CRON_SECRET
+app.get('/api/cron/cleanup-attachments', async (req, res) => {
+  try {
+    const secret = process.env.CRON_SECRET;
+    const authHeader = req.headers.authorization;
+    const token = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : '';
+    if (!secret) {
+      return res.status(503).json({ error: 'CRON_SECRET não configurado' });
+    }
+    const a = Buffer.from(token);
+    const b = Buffer.from(secret);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return res.status(401).json({ error: 'Token inválido' });
+    }
+
+    const supabase = getStorage();
+    if (!supabase) return res.status(503).json({ error: 'Storage não configurado' });
+
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    const removed: string[] = [];
+    let scanned = 0;
+
+    const boardsRes = await query('SELECT id FROM boards');
+    for (const board of boardsRes.rows) {
+      const taskDirs = await listObjects(board.id);
+      for (const dir of taskDirs) {
+        if (dir.id !== null) continue; // só pastas (taskId)
+        const files = await listObjects(`${board.id}/${dir.name}`);
+        for (const file of files) {
+          if (file.id === null) continue;
+          const createdAt = file.created_at ? Date.parse(file.created_at) : NaN;
+          if (Number.isNaN(createdAt) || createdAt > cutoff) continue;
+          scanned++;
+          const storagePath = `${board.id}/${dir.name}/${file.name}`;
+          const rowRes = await query(
+            'SELECT 1 FROM task_attachments WHERE storage_path = $1',
+            [storagePath]
+          );
+          if (rowRes.rows.length === 0) {
+            const ok = await removeObject(storagePath);
+            if (ok) removed.push(storagePath);
+          }
+        }
+      }
+    }
+
+    res.json({ success: true, scanned, removed });
+  } catch (error: any) {
+    console.error('Cleanup attachments failed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ---------------------- BOARD MEMBERS / PERMISSÕES (item 5.1) ---------------------- //
+
+app.get('/api/boards/:id/members', authenticateToken, requireBoardAccess(), async (req, res) => {
+  try {
+    const rows = await query(
+      `SELECT bm.role, bm.permissions, bm.created_at AS joined_at,
+              m.id, m.name, m.email, m.avatar, m.role AS job_title, m.active
+       FROM board_members bm
+       INNER JOIN members m ON m.id = bm.member_id
+       WHERE bm.board_id = $1
+       ORDER BY bm.created_at ASC, m.name ASC`,
+      [req.params.id]
+    );
+    res.json({
+      members: rows.rows.map((r: any) => ({
+        memberId: r.id,
+        name: r.name,
+        email: r.email,
+        avatar: r.avatar || '',
+        jobTitle: r.job_title || '',
+        active: Boolean(r.active),
+        role: r.role,
+        permissions: safeJsonOrRaw(r.permissions),
+        joinedAt: r.joined_at,
+      })),
+      myRole: req.boardPermissions?.role,
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post(
+  '/api/boards/:id/members',
+  authenticateToken,
+  requireBoardPermission('canInviteMember'),
+  validateBody(boardMemberInviteSchema),
+  async (req, res) => {
+    try {
+      const { email, role = 'editor', permissions = {} } = req.body;
+      const memberRes = await query('SELECT * FROM members WHERE email = $1', [email]);
+      if (memberRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Membro não encontrado com esse email' });
+      }
+      const memberId = memberRes.rows[0].id;
+
+      const exists = await query(
+        'SELECT 1 FROM board_members WHERE board_id = $1 AND member_id = $2',
+        [req.params.id, memberId]
+      );
+      if (exists.rows.length > 0) {
+        return res.status(409).json({ error: 'Este membro já participa do quadro' });
+      }
+
+      await query(
+        `INSERT INTO board_members (board_id, member_id, role, permissions, invited_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [req.params.id, memberId, role, JSON.stringify(permissions), req.memberId]
+      );
+
+      res.status(201).json({
+        success: true,
+        member: {
+          memberId,
+          name: memberRes.rows[0].name,
+          email: memberRes.rows[0].email,
+          avatar: memberRes.rows[0].avatar || '',
+          jobTitle: memberRes.rows[0].role || '',
+          active: Boolean(memberRes.rows[0].active),
+          role,
+          permissions,
+          joinedAt: new Date().toISOString(),
+        },
+      });
+    } catch (error: any) {
+      console.error('Error inviting board member:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.patch(
+  '/api/boards/:id/members/:memberId',
+  authenticateToken,
+  requireBoardPermission('canManageMembers'),
+  validateBody(boardMemberPatchSchema),
+  async (req, res) => {
+    try {
+      const { id: boardId, memberId } = req.params;
+      const { role, permissions } = req.body;
+
+      const currentRes = await query(
+        'SELECT * FROM board_members WHERE board_id = $1 AND member_id = $2',
+        [boardId, memberId]
+      );
+      if (currentRes.rows.length === 0) {
+        return res.status(404).json({ error: 'Membro não encontrado neste quadro' });
+      }
+
+      if (role && role !== 'owner' && currentRes.rows[0].role === 'owner') {
+        const ownersRes = await query(
+          "SELECT COUNT(*)::int AS n FROM board_members WHERE board_id = $1 AND role = 'owner'",
+          [boardId]
+        );
+        if (ownersRes.rows[0].n <= 1) {
+          return res.status(409).json({ error: 'Não é possível rebaixar o último owner do quadro' });
+        }
+      }
+
+      const updated = await query(
+        `UPDATE board_members
+         SET role = COALESCE($1, role),
+             permissions = COALESCE($2, permissions)
+         WHERE board_id = $3 AND member_id = $4
+         RETURNING *`,
+        [role ?? null, permissions ? JSON.stringify(permissions) : null, boardId, memberId]
+      );
+
+      res.json({
+        success: true,
+        member: {
+          memberId,
+          role: updated.rows[0].role,
+          permissions: safeJsonOrRaw(updated.rows[0].permissions),
+        },
+      });
+    } catch (error: any) {
+      console.error('Error updating board member:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.delete('/api/boards/:id/members/:memberId', authenticateToken, async (req, res) => {
+  try {
+    const { id: boardId, memberId } = req.params;
+
+    const eff = await resolvePermissions(req.memberId!, boardId);
+    if (!eff) return res.status(403).json({ error: 'Sem acesso a este quadro' });
+    const isSelf = memberId === req.memberId;
+    if (!eff.canManageMembers && !isSelf) {
+      return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canManageMembers' });
+    }
+
+    const currentRes = await query(
+      'SELECT * FROM board_members WHERE board_id = $1 AND member_id = $2',
+      [boardId, memberId]
+    );
+    if (currentRes.rows.length === 0) {
+      return res.status(404).json({ error: 'Membro não encontrado neste quadro' });
+    }
+
+    if (currentRes.rows[0].role === 'owner') {
+      const ownersRes = await query(
+        "SELECT COUNT(*)::int AS n FROM board_members WHERE board_id = $1 AND role = 'owner'",
+        [boardId]
+      );
+      if (ownersRes.rows[0].n <= 1) {
+        return res.status(409).json({ error: 'Não é possível remover o último owner do quadro' });
+      }
+    }
+
+    await query('DELETE FROM board_members WHERE board_id = $1 AND member_id = $2', [
+      boardId,
+      memberId,
+    ]);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error('Error removing board member:', error);
     res.status(500).json({ error: error.message });
   }
 });

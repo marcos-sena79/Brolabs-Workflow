@@ -16,6 +16,7 @@ import { CreateTaskModal } from './components/CreateTaskModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { BoardSettingsModal } from './components/BoardSettingsModal';
 import { TaskArchiveModal } from './components/TaskArchiveModal';
+import { BoardAccessModal } from './components/BoardAccessModal';
 import { CommandPalette } from './components/CommandPalette';
 import { EmailAlertToast } from './components/EmailAlertToast';
 import { EmailNotificationDrawer } from './components/EmailNotificationDrawer';
@@ -71,6 +72,7 @@ const AppContent: React.FC = () => {
       <ShortcutsModal />
       <BoardSettingsModal />
       <TaskArchiveModal />
+      <BoardAccessModal />
       <CommandPalette />
       <EmailAlertToast />
       <EmailNotificationDrawer />

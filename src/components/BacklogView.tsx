@@ -26,6 +26,7 @@ export const BacklogView: React.FC = () => {
     moveTask,
     currentUser,
     createTask,
+    can,
   } = useAgile();
 
   const [quickTitle, setQuickTitle] = useState('');
@@ -80,13 +81,15 @@ export const BacklogView: React.FC = () => {
           </div>
         </div>
 
-        <button
-          onClick={() => setIsCreateModalOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-colors"
-        >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Criar Item de Backlog</span>
-        </button>
+        {can('canCreateTask') && (
+          <button
+            onClick={() => setIsCreateModalOpen(true)}
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white shadow-xs transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Criar Item de Backlog</span>
+          </button>
+        )}
       </div>
 
       {/* SPRINT ATIVO SECTION */}
@@ -225,12 +228,14 @@ export const BacklogView: React.FC = () => {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3 sm:shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <button
-                      onClick={() => moveTask(task.id, getTodoColumnId(currentBoard))}
-                      className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 rounded transition-colors"
-                    >
-                      Puxar para Sprint
-                    </button>
+                    {can('canChangeStatus', task.boardId) && (
+                      <button
+                        onClick={() => moveTask(task.id, getTodoColumnId(currentBoard))}
+                        className="px-2.5 py-1 text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 rounded transition-colors"
+                      >
+                        Puxar para Sprint
+                      </button>
+                    )}
                     <span className="font-mono text-slate-400 text-[11px]">{formatHours(task.estimatedHours)}</span>
                   </div>
                 </div>
@@ -238,22 +243,24 @@ export const BacklogView: React.FC = () => {
             })}
 
             {/* Quick Add into Backlog */}
-            <form onSubmit={(e) => handleQuickAdd('col-backlog', e)} className="p-3 flex gap-2">
-              <input
-                type="text"
-                placeholder="+ Criar item rápido no backlog e teclar Enter..."
-                value={quickTitle}
-                onChange={(e) => setQuickTitle(e.target.value)}
-                className="flex-1 text-xs px-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-              <button
-                type="submit"
-                disabled={!quickTitle.trim()}
-                className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-md shadow-2xs"
-              >
-                Adicionar
-              </button>
-            </form>
+            {can('canCreateTask') && (
+              <form onSubmit={(e) => handleQuickAdd('col-backlog', e)} className="p-3 flex gap-2">
+                <input
+                  type="text"
+                  placeholder="+ Criar item rápido no backlog e teclar Enter..."
+                  value={quickTitle}
+                  onChange={(e) => setQuickTitle(e.target.value)}
+                  className="flex-1 text-xs px-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <button
+                  type="submit"
+                  disabled={!quickTitle.trim()}
+                  className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-md shadow-2xs"
+                >
+                  Adicionar
+                </button>
+              </form>
+            )}
           </div>
         )}
       </div>

@@ -13,6 +13,7 @@ import {
   Keyboard,
   X,
   Archive,
+  Shield,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { ViewTab } from '../types';
@@ -32,6 +33,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
     integrations,
     setIsShortcutsModalOpen,
     setIsTaskArchiveOpen,
+    setIsBoardAccessOpen,
   } = useAgile();
 
   const totalTasks = boardTasks.length;
@@ -179,6 +181,17 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
           <span className="flex items-center gap-2">
             <Archive className="w-3.5 h-3.5 text-slate-400" />
             Arquivo de Tarefas
+          </span>
+        </button>
+
+        <button
+          onClick={() => setIsBoardAccessOpen(true)}
+          className="w-full flex items-center justify-between py-1.5 px-2 text-[11px] font-medium text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-slate-200/50 dark:hover:bg-slate-800 rounded-md transition-colors"
+          title="Gerenciar quem acessa este quadro"
+        >
+          <span className="flex items-center gap-2">
+            <Shield className="w-3.5 h-3.5 text-slate-400" />
+            Acesso ao Quadro
           </span>
         </button>
 

@@ -15,6 +15,9 @@ import {
   EmailNotification,
   EmailSettings,
   DependencyType,
+  TaskAttachment,
+  BoardPermissions,
+  PermissionFlag,
 } from '../types';
 import { api } from '../services/api';
 import { useAuth } from './AuthContext';
@@ -172,6 +175,25 @@ interface AgileContextType {
   markAllEmailsAsRead: () => void;
   clearEmailHistory: () => void;
 
+  // Permissões por board (item 5.1)
+  myPermissions: Record<string, BoardPermissions>;
+  can: (flag: PermissionFlag, boardId?: string) => boolean;
+
+  // Anexos de tarefas (item 2.1)
+  attachmentsByTask: Record<string, TaskAttachment[]>;
+  isAttachmentsLoading: boolean;
+  fetchTaskAttachments: (taskId: string) => Promise<void>;
+  uploadTaskAttachment: (
+    taskId: string,
+    file: File,
+    onProgress?: (pct: number) => void
+  ) => Promise<void>;
+  deleteTaskAttachment: (taskId: string, attachmentId: string) => Promise<void>;
+
+  // Modal de acesso ao quadro (item 5.1)
+  isBoardAccessOpen: boolean;
+  setIsBoardAccessOpen: (open: boolean) => void;
+
   // Reset
   resetToDemoData: () => void;
 }
@@ -234,6 +256,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
   const [isArchivedTasksLoading, setIsArchivedTasksLoading] = useState(false);
 
+  // Permissões + anexos (itens 5.1 / 2.1)
+  const [myPermissions, setMyPermissions] = useState<Record<string, BoardPermissions>>({});
+  const [attachmentsByTask, setAttachmentsByTask] = useState<Record<string, TaskAttachment[]>>({});
+  const [isAttachmentsLoading, setIsAttachmentsLoading] = useState(false);
+  const [isBoardAccessOpen, setIsBoardAccessOpen] = useState(false);
+
   const [filters, setFilters] = useState<FilterState>({
     searchQuery: '',
     selectedAssigneeId: 'all',
@@ -275,6 +303,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setActivityLogs(data.activityLogs || []);
       setIntegrations(data.integrations || []);
       setWebhookLogs(data.webhookLogs || []);
+      setMyPermissions(data.myPermissions || {});
       if (data.emailSettings) {
         setEmailSettings(data.emailSettings);
       }
@@ -304,6 +333,16 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   useEffect(() => {
     fetchDbData();
   }, [fetchDbData]);
+
+  const can = useCallback(
+    (flag: PermissionFlag, boardId?: string): boolean => {
+      const id = boardId || currentBoardId;
+      const perms = myPermissions[id];
+      if (!perms) return true; // ainda sem info — o backend continua sendo a autoridade
+      return Boolean(perms[flag]);
+    },
+    [myPermissions, currentBoardId]
+  );
 
   const setCurrentBoardId = (id: string) => {
     setCurrentBoardIdState(id);
@@ -922,6 +961,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         }))
     );
     setArchivedTasks((prev) => prev.filter((t) => t.id !== taskId));
+    setAttachmentsByTask((prev) => {
+      if (!(taskId in prev)) return prev;
+      const next = { ...prev };
+      delete next[taskId];
+      return next;
+    });
     api.deleteTask(taskId).catch(console.error);
     if (selectedTaskModalId === taskId) setSelectedTaskModalId(null);
     if (activeTimer?.taskId === taskId) setActiveTimer(null);
@@ -1523,6 +1568,39 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     }
   };
 
+  // Task attachments (item 2.1)
+  const fetchTaskAttachments = async (taskId: string): Promise<void> => {
+    try {
+      setIsAttachmentsLoading(true);
+      const attachments = await api.getTaskAttachments(taskId);
+      setAttachmentsByTask((prev) => ({ ...prev, [taskId]: attachments }));
+    } catch (err) {
+      console.error('Falha ao carregar anexos:', err);
+    } finally {
+      setIsAttachmentsLoading(false);
+    }
+  };
+
+  const uploadTaskAttachment = async (
+    taskId: string,
+    file: File,
+    onProgress?: (pct: number) => void
+  ): Promise<void> => {
+    const attachment = await api.uploadTaskAttachment(taskId, file, onProgress);
+    setAttachmentsByTask((prev) => ({
+      ...prev,
+      [taskId]: [attachment, ...(prev[taskId] || [])],
+    }));
+  };
+
+  const deleteTaskAttachment = async (taskId: string, attachmentId: string): Promise<void> => {
+    await api.deleteTaskAttachment(taskId, attachmentId);
+    setAttachmentsByTask((prev) => ({
+      ...prev,
+      [taskId]: (prev[taskId] || []).filter((a) => a.id !== attachmentId),
+    }));
+  };
+
   // Members and persistence to NeonDB
   const addMember = (memberData: Omit<Member, 'id'>) => {
     const newMember: Member = {
@@ -1726,6 +1804,15 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         markEmailAsRead,
         markAllEmailsAsRead,
         clearEmailHistory,
+        myPermissions,
+        can,
+        attachmentsByTask,
+        isAttachmentsLoading,
+        fetchTaskAttachments,
+        uploadTaskAttachment,
+        deleteTaskAttachment,
+        isBoardAccessOpen,
+        setIsBoardAccessOpen,
       }}
     >
       {children}
