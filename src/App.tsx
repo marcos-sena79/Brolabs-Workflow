@@ -22,6 +22,7 @@ import { TagsManagerModal } from './components/TagsManagerModal';
 import { CommandPalette } from './components/CommandPalette';
 import { EmailAlertToast } from './components/EmailAlertToast';
 import { EmailNotificationDrawer } from './components/EmailNotificationDrawer';
+import { FloatingTimer } from './components/FloatingTimer';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { PrivateRoute } from './components/PrivateRoute';
@@ -86,6 +87,8 @@ const AppContent: React.FC = () => {
       <CommandPalette />
       <EmailAlertToast />
       <EmailNotificationDrawer />
+      {/* Item 2 — mini player flutuante do timer (visível em qualquer rota da sessão) */}
+      <FloatingTimer />
     </div>
   );
 };

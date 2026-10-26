@@ -4,6 +4,7 @@ import { useAgile } from '../context/AgileContext';
 import { IssueType, Priority } from '../types';
 import { IssueTypeIcon } from './AgileIcons';
 import { getTodoColumnId } from '../utils/agileHelpers';
+import { normalizeAssigneeIds } from '../utils/taskAssignees';
 
 export const CreateTaskModal: React.FC = () => {
   const {
@@ -24,7 +25,7 @@ export const CreateTaskModal: React.FC = () => {
   const [issueType, setIssueType] = useState<IssueType>('story');
   const [priority, setPriority] = useState<Priority>('medium');
   const [statusId, setStatusId] = useState(getTodoColumnId(currentBoard));
-  const [assigneeId, setAssigneeId] = useState(currentUser.id);
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([currentUser.id]);
   const [epicId, setEpicId] = useState('');
   const [estimatedHours, setEstimatedHours] = useState('8');
   const [storyPoints, setStoryPoints] = useState('5');
@@ -51,7 +52,7 @@ export const CreateTaskModal: React.FC = () => {
       issueType,
       priority,
       statusId,
-      assigneeId,
+      assigneeIds: normalizeAssigneeIds(assigneeIds, [currentUser.id]),
       epicId: epicId || undefined,
       estimatedHours: parseFloat(estimatedHours) || 0,
       storyPoints: parseInt(storyPoints) || 0,
@@ -71,7 +72,7 @@ export const CreateTaskModal: React.FC = () => {
         .map((l) => l.trim())
         .filter(Boolean);
       subtaskLines.forEach((line) => {
-        addSubtask(created.id, line, 2, assigneeId);
+        addSubtask(created.id, line, 2, normalizeAssigneeIds(assigneeIds, [currentUser.id]));
       });
     }
 
@@ -181,23 +182,59 @@ export const CreateTaskModal: React.FC = () => {
             />
           </div>
 
-          {/* Assignee, Priority & Epic */}
+          {/* Assignees (Item 1 — múltiplos responsáveis), Priority & Epic */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Responsável
+                Responsáveis
               </label>
-              <select
-                value={assigneeId}
-                onChange={(e) => setAssigneeId(e.target.value)}
-                className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-              >
-                {members.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
+              <div className="space-y-1.5">
+                {assigneeIds.map((id) => {
+                  const m = members.find((x) => x.id === id);
+                  if (!m) return null;
+                  return (
+                    <div
+                      key={id}
+                      className="flex items-center gap-2 px-2 py-1 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800"
+                    >
+                      <img src={m.avatar} alt={m.name} className="w-5 h-5 rounded-full object-cover" />
+                      <span className="text-xs text-slate-800 dark:text-slate-200 flex-1 truncate">{m.name}</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAssigneeIds((prev) =>
+                            normalizeAssigneeIds(prev.filter((x) => x !== id))
+                          )
+                        }
+                        className="text-slate-400 hover:text-rose-500"
+                        title="Remover responsável"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
+                <select
+                  value=""
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    const id = e.target.value;
+                    setAssigneeIds((prev) =>
+                      normalizeAssigneeIds(prev.includes(id) ? prev : [...prev, id])
+                    );
+                  }}
+                  className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="">+ Adicionar responsável</option>
+                  {members
+                    .filter((m) => !assigneeIds.includes(m.id))
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
+                </select>
+              </div>
             </div>
 
             <div>

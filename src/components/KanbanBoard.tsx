@@ -16,6 +16,7 @@ import { useAgile } from '../context/AgileContext';
 import { TaskCard } from './TaskCard';
 import { Task } from '../types';
 import { isTaskDone } from '../utils/agileHelpers';
+import { taskHasAssignee } from '../utils/taskAssignees';
 
 export const KanbanBoard: React.FC = () => {
   const {
@@ -194,7 +195,7 @@ export const KanbanBoard: React.FC = () => {
             </button>
 
             {members.map((m) => {
-              const count = boardTasks.filter((t) => t.assigneeId === m.id).length;
+              const count = boardTasks.filter((t) => taskHasAssignee(t, m.id)).length;
               const isSelected = filters.selectedAssigneeId === m.id;
               return (
                 <button

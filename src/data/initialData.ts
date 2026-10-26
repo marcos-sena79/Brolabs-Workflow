@@ -114,7 +114,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'story',
     priority: 'urgent',
     statusId: 'col-inprogress',
-    assigneeId: 'mem-2', // Juliana
+    assigneeId: 'mem-2', assigneeIds: ['mem-2'], // Juliana
     reporterId: 'mem-1',
     epicId: 'epic-1',
     estimatedHours: 16,
@@ -125,11 +125,11 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-13T09:00:00Z',
     tags: ['Segurança', 'Backend', 'Auth'],
     subtasks: [
-      { id: 'sub-1', taskId: 'task-1', title: 'Modelar tabela de segredos MFA criptografados', completed: true, assigneeId: 'mem-2', estimatedHours: 3, loggedHours: 3 },
-      { id: 'sub-2', taskId: 'task-1', title: 'Endpoint para gerar seed e QR Code base64', completed: true, assigneeId: 'mem-2', estimatedHours: 4, loggedHours: 4.5 },
-      { id: 'sub-3', taskId: 'task-1', title: 'Endpoint de validação e ativação com token TOTP', completed: true, assigneeId: 'mem-2', estimatedHours: 3, loggedHours: 3 },
-      { id: 'sub-4', taskId: 'task-1', title: 'Geração e download de 10 códigos de backup descartáveis', completed: false, assigneeId: 'mem-2', estimatedHours: 3, loggedHours: 2 },
-      { id: 'sub-5', taskId: 'task-1', title: 'Testes unitários e de integração de expiração de token', completed: false, assigneeId: 'mem-5', estimatedHours: 3, loggedHours: 0 },
+      { id: 'sub-1', taskId: 'task-1', title: 'Modelar tabela de segredos MFA criptografados', completed: true, assigneeId: 'mem-2', assigneeIds: ['mem-2'], estimatedHours: 3, loggedHours: 3 },
+      { id: 'sub-2', taskId: 'task-1', title: 'Endpoint para gerar seed e QR Code base64', completed: true, assigneeId: 'mem-2', assigneeIds: ['mem-2'], estimatedHours: 4, loggedHours: 4.5 },
+      { id: 'sub-3', taskId: 'task-1', title: 'Endpoint de validação e ativação com token TOTP', completed: true, assigneeId: 'mem-2', assigneeIds: ['mem-2'], estimatedHours: 3, loggedHours: 3 },
+      { id: 'sub-4', taskId: 'task-1', title: 'Geração e download de 10 códigos de backup descartáveis', completed: false, assigneeId: 'mem-2', assigneeIds: ['mem-2'], estimatedHours: 3, loggedHours: 2 },
+      { id: 'sub-5', taskId: 'task-1', title: 'Testes unitários e de integração de expiração de token', completed: false, assigneeId: 'mem-5', assigneeIds: ['mem-5'], estimatedHours: 3, loggedHours: 0 },
     ],
     worklogs: [
       { id: 'wl-1', taskId: 'task-1', memberId: 'mem-2', hours: 4.5, date: '2026-10-09', comment: 'Modelagem do esquema e geração do QR Code TOTP', createdAt: '2026-10-09T17:00:00Z' },
@@ -153,7 +153,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'task',
     priority: 'high',
     statusId: 'col-review',
-    assigneeId: 'mem-3', // Rafael
+    assigneeId: 'mem-3', assigneeIds: ['mem-3'], // Rafael
     reporterId: 'mem-4',
     epicId: 'epic-2',
     estimatedHours: 12,
@@ -164,10 +164,10 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-13T08:15:00Z',
     tags: ['Frontend', 'Gráficos', 'UX'],
     subtasks: [
-      { id: 'sub-201', taskId: 'task-2', title: 'Cálculo de regressão linear para linha ideal', completed: true, assigneeId: 'mem-3', estimatedHours: 3, loggedHours: 2.5 },
-      { id: 'sub-202', taskId: 'task-2', title: 'Renderização de caminhos SVG e pontos interativos', completed: true, assigneeId: 'mem-3', estimatedHours: 5, loggedHours: 5.5 },
-      { id: 'sub-203', taskId: 'task-2', title: 'Tooltip com detalhes de horas no hover', completed: true, assigneeId: 'mem-3', estimatedHours: 2, loggedHours: 2 },
-      { id: 'sub-204', taskId: 'task-2', title: 'Validação de acessibilidade e cores WCAG', completed: true, assigneeId: 'mem-4', estimatedHours: 2, loggedHours: 1 },
+      { id: 'sub-201', taskId: 'task-2', title: 'Cálculo de regressão linear para linha ideal', completed: true, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 3, loggedHours: 2.5 },
+      { id: 'sub-202', taskId: 'task-2', title: 'Renderização de caminhos SVG e pontos interativos', completed: true, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 5, loggedHours: 5.5 },
+      { id: 'sub-203', taskId: 'task-2', title: 'Tooltip com detalhes de horas no hover', completed: true, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 2, loggedHours: 2 },
+      { id: 'sub-204', taskId: 'task-2', title: 'Validação de acessibilidade e cores WCAG', completed: true, assigneeId: 'mem-4', assigneeIds: ['mem-4'], estimatedHours: 2, loggedHours: 1 },
     ],
     worklogs: [
       { id: 'wl-201', taskId: 'task-2', memberId: 'mem-3', hours: 6, date: '2026-10-11', comment: 'Construção da lógica matemática e projeção de dias úteis', createdAt: '2026-10-11T18:00:00Z' },
@@ -190,7 +190,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'story',
     priority: 'high',
     statusId: 'col-done',
-    assigneeId: 'mem-1', // Lucas
+    assigneeId: 'mem-1', assigneeIds: ['mem-1'], // Lucas
     reporterId: 'mem-1',
     epicId: 'epic-3',
     estimatedHours: 14,
@@ -201,10 +201,10 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-12T16:00:00Z',
     tags: ['Backend', 'Webhooks', 'Integrações'],
     subtasks: [
-      { id: 'sub-301', taskId: 'task-3', title: 'Assinatura HMAC SHA-256 no header x-flowpulse-signature', completed: true, assigneeId: 'mem-1', estimatedHours: 3, loggedHours: 3 },
-      { id: 'sub-302', taskId: 'task-3', title: 'Formatador de templates para Slack Block Kit', completed: true, assigneeId: 'mem-1', estimatedHours: 4, loggedHours: 3.5 },
-      { id: 'sub-303', taskId: 'task-3', title: 'Formatador de templates para Discord e Teams', completed: true, assigneeId: 'mem-1', estimatedHours: 4, loggedHours: 4 },
-      { id: 'sub-304', taskId: 'task-3', title: 'Tratamento de status HTTP 429 (Rate Limit)', completed: true, assigneeId: 'mem-1', estimatedHours: 3, loggedHours: 2.5 },
+      { id: 'sub-301', taskId: 'task-3', title: 'Assinatura HMAC SHA-256 no header x-flowpulse-signature', completed: true, assigneeId: 'mem-1', assigneeIds: ['mem-1'], estimatedHours: 3, loggedHours: 3 },
+      { id: 'sub-302', taskId: 'task-3', title: 'Formatador de templates para Slack Block Kit', completed: true, assigneeId: 'mem-1', assigneeIds: ['mem-1'], estimatedHours: 4, loggedHours: 3.5 },
+      { id: 'sub-303', taskId: 'task-3', title: 'Formatador de templates para Discord e Teams', completed: true, assigneeId: 'mem-1', assigneeIds: ['mem-1'], estimatedHours: 4, loggedHours: 4 },
+      { id: 'sub-304', taskId: 'task-3', title: 'Tratamento de status HTTP 429 (Rate Limit)', completed: true, assigneeId: 'mem-1', assigneeIds: ['mem-1'], estimatedHours: 3, loggedHours: 2.5 },
     ],
     worklogs: [
       { id: 'wl-301', taskId: 'task-3', memberId: 'mem-1', hours: 7, date: '2026-10-08', comment: 'Configuração do queue dispatcher e algoritmos de backoff', createdAt: '2026-10-08T18:00:00Z' },
@@ -226,7 +226,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'bug',
     priority: 'urgent',
     statusId: 'col-done',
-    assigneeId: 'mem-3', // Rafael
+    assigneeId: 'mem-3', assigneeIds: ['mem-3'], // Rafael
     reporterId: 'mem-2',
     epicId: 'epic-2',
     estimatedHours: 4,
@@ -237,9 +237,9 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-11T17:20:00Z',
     tags: ['Bug', 'Cálculos', 'Horas'],
     subtasks: [
-      { id: 'sub-401', taskId: 'task-4', title: 'Identificar uso de Math.floor na conversão de minutos', completed: true, assigneeId: 'mem-3', estimatedHours: 1, loggedHours: 1.5 },
-      { id: 'sub-402', taskId: 'task-4', title: 'Normalizar números para ponto flutuante com toFixed(1)', completed: true, assigneeId: 'mem-3', estimatedHours: 1.5, loggedHours: 2 },
-      { id: 'sub-403', taskId: 'task-4', title: 'Adicionar testes de cobertura para 0.25h, 0.5h e 0.75h', completed: true, assigneeId: 'mem-3', estimatedHours: 1.5, loggedHours: 2 },
+      { id: 'sub-401', taskId: 'task-4', title: 'Identificar uso de Math.floor na conversão de minutos', completed: true, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 1, loggedHours: 1.5 },
+      { id: 'sub-402', taskId: 'task-4', title: 'Normalizar números para ponto flutuante com toFixed(1)', completed: true, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 1.5, loggedHours: 2 },
+      { id: 'sub-403', taskId: 'task-4', title: 'Adicionar testes de cobertura para 0.25h, 0.5h e 0.75h', completed: true, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 1.5, loggedHours: 2 },
     ],
     worklogs: [
       { id: 'wl-401', taskId: 'task-4', memberId: 'mem-3', hours: 3.5, date: '2026-10-10', comment: 'Depuração na suite de testes e ajuste na função formatHours', createdAt: '2026-10-10T16:00:00Z' },
@@ -256,7 +256,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'story',
     priority: 'medium',
     statusId: 'col-inprogress',
-    assigneeId: 'mem-4', // Camila
+    assigneeId: 'mem-4', assigneeIds: ['mem-4'], // Camila
     reporterId: 'mem-1',
     epicId: 'epic-2',
     estimatedHours: 10,
@@ -267,10 +267,10 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-13T07:45:00Z',
     tags: ['Design', 'UI/UX', 'Figma'],
     subtasks: [
-      { id: 'sub-501', taskId: 'task-5', title: 'Benchmarking de ferramentas de alocação de squads', completed: true, assigneeId: 'mem-4', estimatedHours: 2, loggedHours: 2 },
-      { id: 'sub-502', taskId: 'task-5', title: 'Definição de hierarquia visual e escala de cinzas de alta legibilidade', completed: true, assigneeId: 'mem-4', estimatedHours: 3, loggedHours: 3 },
-      { id: 'sub-503', taskId: 'task-5', title: 'Componentes de cards de membros com barras de progresso', completed: false, assigneeId: 'mem-4', estimatedHours: 3, loggedHours: 2 },
-      { id: 'sub-504', taskId: 'task-5', title: 'Fluxo de filtros rápidos por departamento e cargo', completed: false, assigneeId: 'mem-4', estimatedHours: 2, loggedHours: 0 },
+      { id: 'sub-501', taskId: 'task-5', title: 'Benchmarking de ferramentas de alocação de squads', completed: true, assigneeId: 'mem-4', assigneeIds: ['mem-4'], estimatedHours: 2, loggedHours: 2 },
+      { id: 'sub-502', taskId: 'task-5', title: 'Definição de hierarquia visual e escala de cinzas de alta legibilidade', completed: true, assigneeId: 'mem-4', assigneeIds: ['mem-4'], estimatedHours: 3, loggedHours: 3 },
+      { id: 'sub-503', taskId: 'task-5', title: 'Componentes de cards de membros com barras de progresso', completed: false, assigneeId: 'mem-4', assigneeIds: ['mem-4'], estimatedHours: 3, loggedHours: 2 },
+      { id: 'sub-504', taskId: 'task-5', title: 'Fluxo de filtros rápidos por departamento e cargo', completed: false, assigneeId: 'mem-4', assigneeIds: ['mem-4'], estimatedHours: 2, loggedHours: 0 },
     ],
     worklogs: [
       { id: 'wl-501', taskId: 'task-5', memberId: 'mem-4', hours: 4, date: '2026-10-11', comment: 'Wireframes e fluxo de navegação no Figma', createdAt: '2026-10-11T17:00:00Z' },
@@ -287,7 +287,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'task',
     priority: 'medium',
     statusId: 'col-todo',
-    assigneeId: 'mem-5', // Matheus
+    assigneeId: 'mem-5', assigneeIds: ['mem-5'], // Matheus
     reporterId: 'mem-1',
     epicId: 'epic-2',
     estimatedHours: 8,
@@ -298,9 +298,9 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-10T08:00:00Z',
     tags: ['Banco de Dados', 'Performance', 'DevOps'],
     subtasks: [
-      { id: 'sub-601', taskId: 'task-6', title: 'Analisar plano de execução com EXPLAIN ANALYZE', completed: false, assigneeId: 'mem-5', estimatedHours: 2, loggedHours: 0 },
-      { id: 'sub-602', taskId: 'task-6', title: 'Adicionar índices btree em colunas de agregação', completed: false, assigneeId: 'mem-5', estimatedHours: 3, loggedHours: 0 },
-      { id: 'sub-603', taskId: 'task-6', title: 'Benchmark com carga de 50.000 tarefas simuladas', completed: false, assigneeId: 'mem-5', estimatedHours: 3, loggedHours: 0 },
+      { id: 'sub-601', taskId: 'task-6', title: 'Analisar plano de execução com EXPLAIN ANALYZE', completed: false, assigneeId: 'mem-5', assigneeIds: ['mem-5'], estimatedHours: 2, loggedHours: 0 },
+      { id: 'sub-602', taskId: 'task-6', title: 'Adicionar índices btree em colunas de agregação', completed: false, assigneeId: 'mem-5', assigneeIds: ['mem-5'], estimatedHours: 3, loggedHours: 0 },
+      { id: 'sub-603', taskId: 'task-6', title: 'Benchmark com carga de 50.000 tarefas simuladas', completed: false, assigneeId: 'mem-5', assigneeIds: ['mem-5'], estimatedHours: 3, loggedHours: 0 },
     ],
     worklogs: [],
     comments: [],
@@ -314,7 +314,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'task',
     priority: 'low',
     statusId: 'col-todo',
-    assigneeId: 'mem-5', // Matheus
+    assigneeId: 'mem-5', assigneeIds: ['mem-5'], // Matheus
     reporterId: 'mem-1',
     epicId: 'epic-1',
     estimatedHours: 6,
@@ -325,9 +325,9 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-12T11:00:00Z',
     tags: ['DevOps', 'CI/CD', 'Segurança'],
     subtasks: [
-      { id: 'sub-701', taskId: 'task-7', title: 'Workflow do GitHub Actions para npm audit', completed: true, assigneeId: 'mem-5', estimatedHours: 2, loggedHours: 1 },
-      { id: 'sub-702', taskId: 'task-7', title: 'Configurar thresholds de cobertura mínima (80%)', completed: false, assigneeId: 'mem-5', estimatedHours: 2, loggedHours: 0 },
-      { id: 'sub-703', taskId: 'task-7', title: 'Publicação de badges de qualidade no README', completed: false, assigneeId: 'mem-5', estimatedHours: 2, loggedHours: 0 },
+      { id: 'sub-701', taskId: 'task-7', title: 'Workflow do GitHub Actions para npm audit', completed: true, assigneeId: 'mem-5', assigneeIds: ['mem-5'], estimatedHours: 2, loggedHours: 1 },
+      { id: 'sub-702', taskId: 'task-7', title: 'Configurar thresholds de cobertura mínima (80%)', completed: false, assigneeId: 'mem-5', assigneeIds: ['mem-5'], estimatedHours: 2, loggedHours: 0 },
+      { id: 'sub-703', taskId: 'task-7', title: 'Publicação de badges de qualidade no README', completed: false, assigneeId: 'mem-5', assigneeIds: ['mem-5'], estimatedHours: 2, loggedHours: 0 },
     ],
     worklogs: [
       { id: 'wl-701', taskId: 'task-7', memberId: 'mem-5', hours: 1, date: '2026-10-12', comment: 'Configuração do arquivo action.yml básico', createdAt: '2026-10-12T11:30:00Z' },
@@ -346,7 +346,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'story',
     priority: 'medium',
     statusId: 'col-backlog',
-    assigneeId: 'mem-2', // Juliana
+    assigneeId: 'mem-2', assigneeIds: ['mem-2'], // Juliana
     reporterId: 'mem-1',
     epicId: 'epic-1',
     estimatedHours: 12,
@@ -357,9 +357,9 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-12T10:00:00Z',
     tags: ['Arquitetura', 'Cache', 'Redis'],
     subtasks: [
-      { id: 'sub-801', taskId: 'task-8', title: 'Configurar cliente ioredis com pool de conexões', completed: false, assigneeId: 'mem-2', estimatedHours: 4, loggedHours: 0 },
-      { id: 'sub-802', taskId: 'task-8', title: 'Implementar TTL automático para renovação de token', completed: false, assigneeId: 'mem-2', estimatedHours: 4, loggedHours: 0 },
-      { id: 'sub-803', taskId: 'task-8', title: 'Testes de failover sob queda de nó primário', completed: false, assigneeId: 'mem-2', estimatedHours: 4, loggedHours: 0 },
+      { id: 'sub-801', taskId: 'task-8', title: 'Configurar cliente ioredis com pool de conexões', completed: false, assigneeId: 'mem-2', assigneeIds: ['mem-2'], estimatedHours: 4, loggedHours: 0 },
+      { id: 'sub-802', taskId: 'task-8', title: 'Implementar TTL automático para renovação de token', completed: false, assigneeId: 'mem-2', assigneeIds: ['mem-2'], estimatedHours: 4, loggedHours: 0 },
+      { id: 'sub-803', taskId: 'task-8', title: 'Testes de failover sob queda de nó primário', completed: false, assigneeId: 'mem-2', assigneeIds: ['mem-2'], estimatedHours: 4, loggedHours: 0 },
     ],
     worklogs: [],
     comments: [],
@@ -373,7 +373,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'task',
     priority: 'low',
     statusId: 'col-backlog',
-    assigneeId: 'mem-3', // Rafael
+    assigneeId: 'mem-3', assigneeIds: ['mem-3'], // Rafael
     reporterId: 'mem-4',
     epicId: 'epic-2',
     estimatedHours: 6,
@@ -384,8 +384,8 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-12T14:00:00Z',
     tags: ['Relatórios', 'Exportação', 'Produtividade'],
     subtasks: [
-      { id: 'sub-901', taskId: 'task-9', title: 'Formatador RFC-4180 de CSV com cabeçalhos amigáveis', completed: false, assigneeId: 'mem-3', estimatedHours: 3, loggedHours: 0 },
-      { id: 'sub-902', taskId: 'task-9', title: 'Trigger de download client-side via Blob API', completed: false, assigneeId: 'mem-3', estimatedHours: 3, loggedHours: 0 },
+      { id: 'sub-901', taskId: 'task-9', title: 'Formatador RFC-4180 de CSV com cabeçalhos amigáveis', completed: false, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 3, loggedHours: 0 },
+      { id: 'sub-902', taskId: 'task-9', title: 'Trigger de download client-side via Blob API', completed: false, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 3, loggedHours: 0 },
     ],
     worklogs: [],
     comments: [],
@@ -399,7 +399,7 @@ export const INITIAL_TASKS: Task[] = [
     issueType: 'bug',
     priority: 'low',
     statusId: 'col-done',
-    assigneeId: 'mem-3', // Rafael
+    assigneeId: 'mem-3', assigneeIds: ['mem-3'], // Rafael
     reporterId: 'mem-5',
     epicId: 'epic-2',
     estimatedHours: 3,
@@ -410,8 +410,8 @@ export const INITIAL_TASKS: Task[] = [
     updatedAt: '2026-10-09T16:00:00Z',
     tags: ['Bug', 'CSS', 'Responsividade'],
     subtasks: [
-      { id: 'sub-1001', taskId: 'task-10', title: 'Adicionar max-w-6xl e mx-auto no wrapper modal', completed: true, assigneeId: 'mem-3', estimatedHours: 1.5, loggedHours: 1.5 },
-      { id: 'sub-1002', taskId: 'task-10', title: 'Testar em monitor 4K e resoluções padrão', completed: true, assigneeId: 'mem-3', estimatedHours: 1.5, loggedHours: 1.0 },
+      { id: 'sub-1001', taskId: 'task-10', title: 'Adicionar max-w-6xl e mx-auto no wrapper modal', completed: true, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 1.5, loggedHours: 1.5 },
+      { id: 'sub-1002', taskId: 'task-10', title: 'Testar em monitor 4K e resoluções padrão', completed: true, assigneeId: 'mem-3', assigneeIds: ['mem-3'], estimatedHours: 1.5, loggedHours: 1.0 },
     ],
     worklogs: [
       { id: 'wl-1001', taskId: 'task-10', memberId: 'mem-3', hours: 2.5, date: '2026-10-09', comment: 'Correção de classes de posicionamento e verificação em múltiplos viewports', createdAt: '2026-10-09T15:45:00Z' },
@@ -535,7 +535,7 @@ export const INITIAL_WEBHOOK_LOGS: WebhookLog[] = [
     platform: 'slack',
     eventType: 'task_completed',
     payloadSummary: '[Slack] Tarefa ENG-103 (Webhook dispatcher) movida para Concluído por Lucas Santos',
-    status: 'delivered',
+    status: 'simulated',
     timestamp: '2026-10-12T16:00:02Z',
   },
   {
@@ -543,7 +543,7 @@ export const INITIAL_WEBHOOK_LOGS: WebhookLog[] = [
     platform: 'slack',
     eventType: 'worklog_logged',
     payloadSummary: '[Slack] Juliana Ferreira registrou 3h em ENG-101. Total acumulado: 12.5h / 16h',
-    status: 'delivered',
+    status: 'simulated',
     timestamp: '2026-10-12T15:20:05Z',
   },
   {
@@ -551,7 +551,7 @@ export const INITIAL_WEBHOOK_LOGS: WebhookLog[] = [
     platform: 'discord',
     eventType: 'task_completed',
     payloadSummary: '[Discord] Notificação enviada em #feed-devs: ENG-104 finalizada (Rafael Lima)',
-    status: 'delivered',
+    status: 'simulated',
     timestamp: '2026-10-11T17:20:10Z',
   },
 ];

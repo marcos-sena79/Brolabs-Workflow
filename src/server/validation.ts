@@ -142,6 +142,7 @@ export const taskCreateSchema = z
     issueType: z.string().min(1).max(50),
     priority: z.string().min(1).max(50),
     statusId: z.string().min(1).max(100),
+    assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
   })
   .passthrough();
 
@@ -149,6 +150,7 @@ export const taskUpdateSchema = z
   .object({
     title: z.string().trim().min(1).max(500).optional(),
     statusId: z.string().min(1).max(100).optional(),
+    assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
   })
   .passthrough();
 

@@ -26,6 +26,7 @@ import {
   TagDef,
 } from '../types';
 import { api } from '../services/api';
+import { normalizeAssigneeIds, taskHasAssignee } from '../utils/taskAssignees';
 import { useAuth } from './AuthContext';
 import { useTheme } from './ThemeContext';
 import { getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
@@ -101,7 +102,8 @@ interface AgileContextType {
     issueType: Task['issueType'];
     priority: Task['priority'];
     statusId: string;
-    assigneeId: string;
+    assigneeId?: string;
+    assigneeIds?: string[];
     epicId?: string;
     estimatedHours: number;
     storyPoints: number;
@@ -115,7 +117,7 @@ interface AgileContextType {
   unarchiveTask: (taskId: string) => Promise<void>;
   fetchArchivedTasks: () => Promise<void>;
 
-  addSubtask: (taskId: string, title: string, estimatedHours?: number, assigneeId?: string) => void;
+  addSubtask: (taskId: string, title: string, estimatedHours?: number, assigneeIds?: string[]) => void;
   toggleSubtask: (taskId: string, subtaskId: string) => void;
   deleteSubtask: (taskId: string, subtaskId: string) => void;
   reorderSubtasks: (taskId: string, sourceIndex: number, destinationIndex: number) => void;
@@ -729,11 +731,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (!matchesKey && !matchesTitle && !matchesDesc && !matchesTags) return false;
       }
 
-      if (filters.selectedAssigneeId !== 'all' && task.assigneeId !== filters.selectedAssigneeId) {
+      if (filters.selectedAssigneeId !== 'all' && !taskHasAssignee(task, filters.selectedAssigneeId)) {
         return false;
       }
 
-      if (filters.onlyMyTasks && task.assigneeId !== currentUser.id) {
+      if (filters.onlyMyTasks && !taskHasAssignee(task, currentUser.id)) {
         return false;
       }
 
@@ -900,7 +902,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         platform: integration.id,
         eventType,
         payloadSummary: `[${integration.name}] ${summary}`,
-        status: 'delivered',
+        status: 'simulated',
         timestamp: new Date().toISOString(),
       };
 
@@ -935,7 +937,8 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     issueType: Task['issueType'];
     priority: Task['priority'];
     statusId: string;
-    assigneeId: string;
+    assigneeId?: string;
+    assigneeIds?: string[];
     epicId?: string;
     estimatedHours: number;
     storyPoints: number;
@@ -950,6 +953,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 101;
     const taskKey = `${prefix}-${nextNumber}`;
 
+    const assigneeIds = normalizeAssigneeIds(
+      taskData.assigneeIds,
+      taskData.assigneeId ? [taskData.assigneeId] : [currentUser.id]
+    );
+
     const newTask: Task = {
       id: `task-${Date.now()}`,
       key: taskKey,
@@ -959,7 +967,8 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       issueType: taskData.issueType || 'task',
       priority: taskData.priority || 'medium',
       statusId: taskData.statusId || getTodoColumnId(currentBoard),
-      assigneeId: taskData.assigneeId || currentUser.id,
+      assigneeId: assigneeIds[0] || currentUser.id,
+      assigneeIds: assigneeIds.length ? assigneeIds : [currentUser.id],
       reporterId: currentUser.id,
       epicId: taskData.epicId,
       estimatedHours: taskData.estimatedHours || 0,
@@ -1001,7 +1010,18 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             ...updates,
             updatedAt: new Date().toISOString(),
           };
-          api.updateTask(taskId, updates).catch(console.error);
+          // Sincroniza lista e principal quando qualquer lado do assignee muda
+          let payload: Partial<Task> = updates;
+          if ('assigneeIds' in updates || 'assigneeId' in updates) {
+            const ids = normalizeAssigneeIds(
+              'assigneeIds' in updates ? updates.assigneeIds : undefined,
+              'assigneeId' in updates && updates.assigneeId ? [updates.assigneeId] : t.assigneeIds
+            );
+            updated.assigneeIds = ids;
+            updated.assigneeId = ids[0] || '';
+            payload = { ...updates, assigneeIds: ids, assigneeId: updated.assigneeId };
+          }
+          api.updateTask(taskId, payload).catch(console.error);
           return updated;
         }
         return t;
@@ -1133,13 +1153,15 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   // Subtask management with NeonDB persistence
-  const addSubtask = (taskId: string, title: string, estimatedHours = 1, assigneeId?: string) => {
+  const addSubtask = (taskId: string, title: string, estimatedHours = 1, assigneeIds?: string[]) => {
+    const ids = normalizeAssigneeIds(assigneeIds, [currentUser.id]);
     const newSub: SubTask = {
       id: `sub-${Date.now()}`,
       taskId,
       title,
       completed: false,
-      assigneeId: assigneeId || currentUser.id,
+      assigneeId: ids[0] || currentUser.id,
+      assigneeIds: ids,
       estimatedHours,
       loggedHours: 0,
     };
@@ -1807,7 +1829,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       platform,
       eventType: 'test_ping',
       payloadSummary: `[Teste] Disparo simulado com sucesso para ${target.name} (${target.channelName})`,
-      status: 'delivered',
+      status: 'simulated',
       timestamp: new Date().toISOString(),
     };
 

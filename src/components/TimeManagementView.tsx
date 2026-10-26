@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { formatHours, formatDate, isTaskDone } from '../utils/agileHelpers';
+import { taskAssigneeIds, taskHasAssignee } from '../utils/taskAssignees';
 import { IssueTypeIcon } from './AgileIcons';
 
 export const TimeManagementView: React.FC = () => {
@@ -57,7 +58,7 @@ export const TimeManagementView: React.FC = () => {
       const q = searchTerm.toLowerCase();
       if (!t.key.toLowerCase().includes(q) && !t.title.toLowerCase().includes(q)) return false;
     }
-    if (memberFilter !== 'all' && t.assigneeId !== memberFilter) return false;
+    if (memberFilter !== 'all' && !taskHasAssignee(t, memberFilter)) return false;
     if (filterType === 'overrun') {
       return t.estimatedHours > 0 && t.loggedHours > t.estimatedHours;
     }
@@ -83,7 +84,11 @@ export const TimeManagementView: React.FC = () => {
   const handleExportCSV = () => {
     const headers = ['Chave', 'Titulo', 'Tipo', 'Responsavel', 'Status', 'Horas Estimadas', 'Horas Realizadas', 'Variancia (h)'];
     const rows = boardTasks.map((t) => {
-      const member = members.find((m) => m.id === t.assigneeId)?.name || 'N/A';
+      const member =
+        taskAssigneeIds(t)
+          .map((id) => members.find((m) => m.id === id)?.name)
+          .filter(Boolean)
+          .join('; ') || 'N/A';
       const col = currentBoard.columns.find((c) => c.id === t.statusId)?.title || 'N/A';
       const variance = (t.loggedHours - t.estimatedHours).toFixed(1);
       return `"${t.key}","${t.title.replace(/"/g, '""')}","${t.issueType}","${member}","${col}",${t.estimatedHours},${t.loggedHours},${variance}`;

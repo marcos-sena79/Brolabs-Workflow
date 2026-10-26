@@ -18,6 +18,7 @@ import { Task } from '../types';
 import { useAgile } from '../context/AgileContext';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 import { formatHours, formatDate, isOverdue, isTaskDone } from '../utils/agileHelpers';
+import { taskAssigneeIds } from '../utils/taskAssignees';
 
 interface TaskCardProps {
   task: Task;
@@ -38,7 +39,12 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
     colorForTag,
   } = useAgile();
 
-  const assignee = members.find((m) => m.id === task.assigneeId);
+  // Múltiplos responsáveis (Item 1): card mostra até 3 avatares + "+N" (D1: sem limite)
+  const assignees = taskAssigneeIds(task)
+    .map((id) => members.find((m) => m.id === id))
+    .filter((m): m is NonNullable<typeof m> => Boolean(m));
+  const visibleAssignees = assignees.slice(0, 3);
+  const extraAssignees = assignees.length - visibleAssignees.length;
   const epic = currentBoard.epics?.find((e) => e.id === task.epicId);
 
   // Subtasks progress
@@ -322,15 +328,27 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
 
       {/* Card Footer: Assignee, Due Date, Comments & Column Navigation Arrows */}
       <div className="flex items-center justify-between pt-1 border-t border-slate-100 dark:border-slate-700/60 text-[11px]">
-        {/* Left: Assignee */}
+        {/* Left: Assignees (até 3 + "+N") */}
         <div className="flex items-center gap-1.5">
-          {assignee ? (
-            <img
-              src={assignee.avatar}
-              alt={assignee.name}
-              title={`Responsável: ${assignee.name} (${assignee.role})`}
-              className="w-5 h-5 rounded-full object-cover border border-slate-200 dark:border-slate-700"
-            />
+          {assignees.length > 0 ? (
+            <span
+              className="flex items-center -space-x-1.5"
+              title={`Responsáveis: ${assignees.map((m) => m.name).join(', ')}`}
+            >
+              {visibleAssignees.map((m) => (
+                <img
+                  key={m.id}
+                  src={m.avatar}
+                  alt={m.name}
+                  className="w-5 h-5 rounded-full object-cover border border-slate-200 dark:border-slate-700"
+                />
+              ))}
+              {extraAssignees > 0 && (
+                <span className="w-5 h-5 rounded-full bg-indigo-100 dark:bg-indigo-900 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-[9px] font-bold text-indigo-600 dark:text-indigo-300">
+                  +{extraAssignees}
+                </span>
+              )}
+            </span>
           ) : (
             <span className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 flex items-center justify-center text-[9px] text-slate-500">
               ?

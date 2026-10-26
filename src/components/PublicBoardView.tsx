@@ -69,10 +69,16 @@ const PublicTaskCard: React.FC<{ task: PublicTask }> = ({ task }) => {
       )}
 
       <div className="flex items-center gap-2.5 pt-0.5 text-[10px] text-slate-500 dark:text-slate-400">
-        {task.assigneeName && (
-          <span className="inline-flex items-center gap-1 truncate" title={task.assigneeName}>
+        {(task.assigneeNames?.length || task.assigneeName) && (
+          <span
+            className="inline-flex items-center gap-1 truncate"
+            title={(task.assigneeNames?.length ? task.assigneeNames : [task.assigneeName!]).join(', ')}
+          >
             <User className="w-3 h-3" />
-            <span className="truncate max-w-[90px]">{task.assigneeName}</span>
+            <span className="truncate max-w-[90px]">
+              {task.assigneeName}
+              {(task.assigneeNames?.length ?? 0) > 1 ? ` +${task.assigneeNames!.length - 1}` : ''}
+            </span>
           </span>
         )}
         {task.dueDate && (

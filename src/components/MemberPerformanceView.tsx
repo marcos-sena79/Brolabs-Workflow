@@ -20,6 +20,7 @@ import {
 import { useAgile } from '../context/AgileContext';
 import { Member } from '../types';
 import { formatHours, formatDate, isTaskDone } from '../utils/agileHelpers';
+import { taskHasAssignee } from '../utils/taskAssignees';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 import { api } from '../services/api';
 
@@ -61,7 +62,8 @@ export const MemberPerformanceView: React.FC = () => {
 
   // Compute metrics for every member
   const memberStats = members.map((member) => {
-    const memberTasks = boardTasks.filter((t) => t.assigneeId === member.id);
+    // Item 1 (D1): tarefa conta para cada responsável; totais globais são por tarefa (1×)
+    const memberTasks = boardTasks.filter((t) => taskHasAssignee(t, member.id));
     const doneTasks = memberTasks.filter((t) => isTaskDone(currentBoard, t.statusId));
     const inProgressTasks = memberTasks.filter((t) => t.statusId === 'col-inprogress');
 

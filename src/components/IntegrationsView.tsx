@@ -168,7 +168,7 @@ export const IntegrationsView: React.FC = () => {
             </span>
             <div>
               <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100 tracking-tight">
-                Canais de Comunicação & Webhooks em Tempo Real
+                Canais de Comunicação & Webhooks
               </h2>
               <p className="text-xs text-slate-500">
                 Integração nativa com Slack, Discord, Microsoft Teams e endpoints HTTP corporativos
@@ -180,7 +180,7 @@ export const IntegrationsView: React.FC = () => {
         <div className="flex items-center gap-2 text-xs">
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Dispatcher Ativo
+            Envio pelo navegador
           </span>
         </div>
       </div>
@@ -466,9 +466,8 @@ export const IntegrationsView: React.FC = () => {
           <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
             <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
               <Bell className="w-4 h-4 text-emerald-500" />
-              Histórico de Disparos em Tempo Real ({webhookLogs.length})
+              Histórico de Disparos ({webhookLogs.length})
             </h3>
-            <span className="text-[10px] text-emerald-600 font-medium">Status 200 OK</span>
           </div>
 
           <div className="space-y-2 max-h-72 overflow-y-auto">

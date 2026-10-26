@@ -20,6 +20,7 @@ export interface SubTask {
   title: string;
   completed: boolean;
   assigneeId?: string;
+  assigneeIds?: string[]; // subtarefas herdam o mecanismo (Item 1)
   estimatedHours: number;
   loggedHours: number;
 }
@@ -60,7 +61,8 @@ export interface Task {
   issueType: IssueType;
   priority: Priority;
   statusId: string;
-  assigneeId: string;
+  assigneeId: string; // principal (primeiro da lista; compat legado)
+  assigneeIds: string[]; // múltiplos responsáveis (Item 1 — Onda 2)
   reporterId: string;
   epicId?: string;
   estimatedHours: number;
@@ -326,6 +328,7 @@ export interface PublicTask {
   priority: string;
   issueType: string;
   assigneeName: string | null;
+  assigneeNames?: string[]; // múltiplos responsáveis no payload público (Item 1)
   dueDate: string;
   storyPoints: number;
   tags: string[];

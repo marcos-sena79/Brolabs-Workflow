@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import { pool, query } from './src/server/db';
+import { normalizeAssigneeIds, taskAssigneeIds } from './src/utils/taskAssignees';
 import { initializeDatabase, seedDatabase } from './src/server/initDb';
 import {
   authenticateToken,
@@ -287,6 +288,10 @@ function mapDbMember(row: any) {
 }
 
 function mapDbTask(row: any) {
+  const assigneeIds = normalizeAssigneeIds(
+    safeJson(row.assignee_ids, []),
+    row.assignee_id ? [row.assignee_id] : []
+  );
   return {
     id: row.id,
     key: row.key,
@@ -296,7 +301,8 @@ function mapDbTask(row: any) {
     issueType: row.issue_type,
     priority: row.priority,
     statusId: row.status_id,
-    assigneeId: row.assignee_id || '',
+    assigneeId: assigneeIds[0] || '',
+    assigneeIds,
     reporterId: row.reporter_id || '',
     epicId: row.epic_id || undefined,
     estimatedHours: parseFloat(row.estimated_hours) || 0,
@@ -692,15 +698,18 @@ async function ensureTagsExist(tags: any, memberId: string): Promise<void> {
 app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'), validateBody(taskCreateSchema), async (req, res) => {
   try {
     const t = req.body;
+    const assigneeIds = normalizeAssigneeIds(t.assigneeIds, t.assigneeId ? [t.assigneeId] : []);
     await query(
       `INSERT INTO tasks (
         id, key, board_id, title, description, issue_type, priority, status_id,
         assignee_id, reporter_id, epic_id, estimated_hours, logged_hours, story_points,
-        due_date, created_at, updated_at, subtasks, worklogs, comments, tags, dependencies
+        due_date, created_at, updated_at, subtasks, worklogs, comments, tags, dependencies,
+        assignee_ids
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12, $13, $14,
-        $15, $16, $17, $18, $19, $20, $21, $22
+        $15, $16, $17, $18, $19, $20, $21, $22,
+        $23
       )`,
       [
         t.id,
@@ -711,7 +720,7 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
         t.issueType,
         t.priority,
         t.statusId,
-        t.assigneeId || '',
+        assigneeIds[0] || '',
         t.reporterId || '',
         t.epicId || null,
         t.estimatedHours || 0,
@@ -725,6 +734,7 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
         JSON.stringify(t.comments || []),
         JSON.stringify(t.tags || []),
         JSON.stringify(t.dependencies || []),
+        JSON.stringify(assigneeIds),
       ]
     );
 
@@ -773,14 +783,26 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
 
     const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
 
+    // Múltiplos responsáveis (Item 1): lista é fonte de verdade; assignee_id = 1º
+    let assigneeIds: string[];
+    if ('assigneeIds' in updates) {
+      assigneeIds = normalizeAssigneeIds(updates.assigneeIds, current.assigneeIds);
+    } else if ('assigneeId' in updates) {
+      assigneeIds = normalizeAssigneeIds(undefined, updates.assigneeId ? [updates.assigneeId] : []);
+    } else {
+      assigneeIds = current.assigneeIds;
+    }
+    merged.assigneeIds = assigneeIds;
+    merged.assigneeId = assigneeIds[0] || '';
+
     await query(
       `UPDATE tasks SET
         key = $1, board_id = $2, title = $3, description = $4, issue_type = $5,
         priority = $6, status_id = $7, assignee_id = $8, reporter_id = $9, epic_id = $10,
         estimated_hours = $11, logged_hours = $12, story_points = $13, due_date = $14,
         updated_at = $15, subtasks = $16, worklogs = $17, comments = $18, tags = $19,
-        dependencies = $20
-      WHERE id = $21`,
+        dependencies = $20, assignee_ids = $21
+      WHERE id = $22`,
       [
         merged.key,
         merged.boardId,
@@ -802,6 +824,7 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
         JSON.stringify(merged.comments || []),
         JSON.stringify(merged.tags || []),
         JSON.stringify(merged.dependencies || []),
+        JSON.stringify(assigneeIds),
         id,
       ]
     );
@@ -1195,16 +1218,28 @@ app.get('/api/public/boards/:token', async (req, res) => {
     if (b.share_token_expires_at && new Date(b.share_token_expires_at) < new Date()) return notFound();
 
     const tasksRes = await query(
-      `SELECT t.*, m.name AS assignee_name FROM tasks t
-       LEFT JOIN members m ON m.id = t.assignee_id
+      `SELECT t.* FROM tasks t
        WHERE t.board_id = $1 AND t.archived_at IS NULL
        ORDER BY t.created_at DESC`,
       [b.id]
     );
 
-    const publicTasks = tasksRes.rows.map((t) => {
+    // Nomes de todos os responsáveis (Item 1) — payload público segue saneado (só nomes)
+    const rawWithIds = tasksRes.rows.map((t) => ({
+      t,
+      ids: normalizeAssigneeIds(safeJson(t.assignee_ids, []), t.assignee_id ? [t.assignee_id] : []),
+    }));
+    const allAssigneeIds = [...new Set(rawWithIds.flatMap((x) => x.ids))];
+    const nameById = new Map<string, string>();
+    if (allAssigneeIds.length > 0) {
+      const mRes = await query('SELECT id, name FROM members WHERE id = ANY($1)', [allAssigneeIds]);
+      for (const r of mRes.rows) nameById.set(String(r.id), String(r.name));
+    }
+
+    const publicTasks = rawWithIds.map(({ t, ids }) => {
       const comments = safeJson(t.comments, []);
       const subtasks = safeJson(t.subtasks, []);
+      const assigneeNames = ids.map((id) => nameById.get(id)).filter((n): n is string => Boolean(n));
       return {
         id: t.id,
         key: t.key,
@@ -1212,7 +1247,8 @@ app.get('/api/public/boards/:token', async (req, res) => {
         statusId: t.status_id,
         priority: t.priority,
         issueType: t.issue_type,
-        assigneeName: t.assignee_name || null,
+        assigneeName: assigneeNames[0] || null,
+        assigneeNames,
         dueDate: t.due_date || '',
         storyPoints: parseInt(t.story_points, 10) || 0,
         tags: safeJson(t.tags, []),
@@ -2465,7 +2501,9 @@ async function buildTodoSuggestions(memberId: string, today: string): Promise<an
 
   const tasksRes = await query(
     `SELECT * FROM tasks
-     WHERE assignee_id = $1 AND archived_at IS NULL
+     WHERE archived_at IS NULL
+       AND (assignee_id = $1
+            OR $1 = ANY(ARRAY(SELECT jsonb_array_elements_text(COALESCE(assignee_ids, '[]'::jsonb)))))
        AND due_date IS NOT NULL AND due_date <> ''
        AND LEFT(due_date, 10) <= $2
      ORDER BY due_date ASC LIMIT 25`,
@@ -2850,21 +2888,31 @@ app.post('/api/notes/ai/from-sprint', authenticateToken, validateBody(noteFromSp
     const board = boardRes.rows[0];
 
     const tasksRes = await query(
-      `SELECT t.*, m.name AS assignee_name FROM tasks t
-       LEFT JOIN members m ON m.id = t.assignee_id
+      `SELECT t.* FROM tasks t
        WHERE t.board_id = $1 AND t.archived_at IS NULL
        ORDER BY t.created_at DESC LIMIT 50`,
       [boardId]
     );
 
+    const aiTaskRows = tasksRes.rows.map((t) => ({
+      t,
+      ids: normalizeAssigneeIds(safeJson(t.assignee_ids, []), t.assignee_id ? [t.assignee_id] : []),
+    }));
+    const aiAssigneeIds = [...new Set(aiTaskRows.flatMap((x) => x.ids))];
+    const aiNameById = new Map<string, string>();
+    if (aiAssigneeIds.length > 0) {
+      const mRes = await query('SELECT id, name FROM members WHERE id = ANY($1)', [aiAssigneeIds]);
+      for (const r of mRes.rows) aiNameById.set(String(r.id), String(r.name));
+    }
+
     const statusTitle = new Map(
       safeJson(board.columns, []).map((c: any) => [String(c.id), String(c.title || '')])
     );
 
-    const lines = tasksRes.rows.map(
-      (t) =>
-        `- ${t.key} | ${String(t.title).slice(0, 120)} | status: ${statusTitle.get(String(t.status_id)) || t.status_id} | prioridade: ${t.priority} | vence: ${t.due_date ? String(t.due_date).slice(0, 10) : '-'} | pontos: ${t.story_points ?? '-'} | responsável: ${t.assignee_name || '-'}`
-    );
+    const lines = aiTaskRows.map(({ t, ids }) => {
+      const responsible = ids.map((id) => aiNameById.get(id)).filter(Boolean).join(', ');
+      return `- ${t.key} | ${String(t.title).slice(0, 120)} | status: ${statusTitle.get(String(t.status_id)) || t.status_id} | prioridade: ${t.priority} | vence: ${t.due_date ? String(t.due_date).slice(0, 10) : '-'} | pontos: ${t.story_points ?? '-'} | responsável: ${responsible || '-'}`;
+    });
     const context = lines.join('\n');
     inputChars = context.length;
 

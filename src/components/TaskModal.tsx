@@ -41,6 +41,7 @@ import {
   getIssueTypeLabel,
   isTaskDone,
 } from '../utils/agileHelpers';
+import { taskAssigneeIds } from '../utils/taskAssignees';
 
 export const TaskModal: React.FC = () => {
   const {
@@ -159,7 +160,7 @@ export const TaskModal: React.FC = () => {
   const handleAddSubtaskSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!newSubtaskTitle.trim()) return;
-    addSubtask(task.id, newSubtaskTitle.trim(), parseFloat(newSubtaskHours) || 1, task.assigneeId);
+    addSubtask(task.id, newSubtaskTitle.trim(), parseFloat(newSubtaskHours) || 1, taskAssigneeIds(task));
     setNewSubtaskTitle('');
     setNewSubtaskHours('1');
   };
@@ -1202,22 +1203,58 @@ export const TaskModal: React.FC = () => {
 
             {/* DETAILS FIELDS */}
             <div className="space-y-3.5 text-xs">
-              {/* Assignee */}
+              {/* Assignees (Item 1 — múltiplos responsáveis, D1: sem limite de modelo) */}
               <div>
                 <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                  Responsável
+                  Responsáveis
                 </label>
-                <div className="flex items-center gap-2">
+                <div className="space-y-1.5">
+                  {taskAssigneeIds(task).length === 0 && (
+                    <div className="text-[10px] text-slate-400">Sem responsável — adicione abaixo.</div>
+                  )}
+                  {taskAssigneeIds(task).map((id) => {
+                    const m = members.find((x) => x.id === id);
+                    if (!m) return null;
+                    return (
+                      <div
+                        key={id}
+                        className="flex items-center gap-2 px-2 py-1 rounded-md border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/60"
+                      >
+                        <img src={m.avatar} alt={m.name} className="w-5 h-5 rounded-full object-cover" />
+                        <span className="text-xs text-slate-700 dark:text-slate-300 flex-1 truncate">
+                          {m.name} ({m.role})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateTask(task.id, {
+                              assigneeIds: taskAssigneeIds(task).filter((x) => x !== id),
+                            })
+                          }
+                          className="text-slate-400 hover:text-rose-500"
+                          title="Remover responsável"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    );
+                  })}
                   <select
-                    value={task.assigneeId}
-                    onChange={(e) => updateTask(task.id, { assigneeId: e.target.value })}
+                    value=""
+                    onChange={(e) => {
+                      if (!e.target.value) return;
+                      updateTask(task.id, { assigneeIds: [...taskAssigneeIds(task), e.target.value] });
+                    }}
                     className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
                   >
-                    {members.map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.name} ({m.role})
-                      </option>
-                    ))}
+                    <option value="">+ Adicionar responsável</option>
+                    {members
+                      .filter((m) => !taskAssigneeIds(task).includes(m.id))
+                      .map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name} ({m.role})
+                        </option>
+                      ))}
                   </select>
                 </div>
               </div>
