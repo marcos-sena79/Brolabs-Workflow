@@ -64,7 +64,8 @@ export interface Task {
   assigneeId: string; // principal (primeiro da lista; compat legado)
   assigneeIds: string[]; // múltiplos responsáveis (Item 1 — Onda 2)
   reporterId: string;
-  epicId?: string;
+  epicId?: string | null;
+  parentId?: string | null; // história pai (Onda 2 — 2A)
   estimatedHours: number;
   loggedHours: number;
   storyPoints: number;

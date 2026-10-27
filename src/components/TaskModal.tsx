@@ -1284,7 +1284,7 @@ export const TaskModal: React.FC = () => {
                 </label>
                 <select
                   value={task.epicId || ''}
-                  onChange={(e) => updateTask(task.id, { epicId: e.target.value || undefined })}
+                  onChange={(e) => updateTask(task.id, { epicId: e.target.value || null })}
                   className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
                 >
                   <option value="">Sem Épico</option>
@@ -1294,6 +1294,32 @@ export const TaskModal: React.FC = () => {
                     </option>
                   ))}
                 </select>
+              </div>
+
+              {/* História pai (Onda 2 — 2A) */}
+              <div>
+                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                  História pai
+                </label>
+                <select
+                  value={task.parentId || ''}
+                  onChange={(e) => updateTask(task.id, { parentId: e.target.value || null })}
+                  className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  <option value="">Nenhuma (tarefa avulsa)</option>
+                  {tasks
+                    .filter((t) => t.boardId === task.boardId && t.issueType === 'story' && t.id !== task.id)
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        [{t.key}] {t.title.length > 55 ? `${t.title.substring(0, 55)}...` : t.title}
+                      </option>
+                    ))}
+                </select>
+                {task.parentId && !tasks.some((t) => t.id === task.parentId && t.issueType === 'story') && (
+                  <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                    História pai não encontrada no quadro (remova o vínculo)
+                  </p>
+                )}
               </div>
 
               {/* Story Points */}

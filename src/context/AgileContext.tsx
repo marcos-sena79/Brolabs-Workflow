@@ -105,6 +105,7 @@ interface AgileContextType {
     assigneeId?: string;
     assigneeIds?: string[];
     epicId?: string;
+    parentId?: string;
     estimatedHours: number;
     storyPoints: number;
     dueDate: string;
@@ -940,6 +941,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     assigneeId?: string;
     assigneeIds?: string[];
     epicId?: string;
+    parentId?: string;
     estimatedHours: number;
     storyPoints: number;
     dueDate: string;
@@ -971,6 +973,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       assigneeIds: assigneeIds.length ? assigneeIds : [currentUser.id],
       reporterId: currentUser.id,
       epicId: taskData.epicId,
+      parentId: taskData.parentId || null,
       estimatedHours: taskData.estimatedHours || 0,
       loggedHours: 0,
       storyPoints: taskData.storyPoints || 1,

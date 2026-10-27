@@ -105,7 +105,7 @@ async function runGeminiOnce(prompt: string): Promise<string> {
       },
     });
     const text = res.text;
-    if (!text || !text.trim()) throw new AiFailedError('Resposta vazia do modelo');
+    if (!text || !text.trim()) throw new AiFailedError('Resposta vazia do modelo!');
     return text;
   } finally {
     clearTimeout(timer);
@@ -143,7 +143,7 @@ async function runOpenRouterOnce(prompt: string): Promise<string> {
 
     const data: any = await res.json();
     const text: string | undefined = data?.choices?.[0]?.message?.content;
-    if (!text || !text.trim()) throw new AiFailedError('Resposta vazia do modelo');
+    if (!text || !text.trim()) throw new AiFailedError('Resposta vazia do modelo!');
     return text;
   } finally {
     clearTimeout(timer);

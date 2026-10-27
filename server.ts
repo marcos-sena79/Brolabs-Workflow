@@ -305,6 +305,7 @@ function mapDbTask(row: any) {
     assigneeIds,
     reporterId: row.reporter_id || '',
     epicId: row.epic_id || undefined,
+    parentId: row.parent_id || undefined,
     estimatedHours: parseFloat(row.estimated_hours) || 0,
     loggedHours: parseFloat(row.logged_hours) || 0,
     storyPoints: parseInt(row.story_points, 10) || 0,
@@ -704,12 +705,12 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
         id, key, board_id, title, description, issue_type, priority, status_id,
         assignee_id, reporter_id, epic_id, estimated_hours, logged_hours, story_points,
         due_date, created_at, updated_at, subtasks, worklogs, comments, tags, dependencies,
-        assignee_ids
+        assignee_ids, parent_id
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12, $13, $14,
         $15, $16, $17, $18, $19, $20, $21, $22,
-        $23
+        $23, $24
       )`,
       [
         t.id,
@@ -735,6 +736,7 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
         JSON.stringify(t.tags || []),
         JSON.stringify(t.dependencies || []),
         JSON.stringify(assigneeIds),
+        t.parentId || null,
       ]
     );
 
@@ -801,8 +803,8 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
         priority = $6, status_id = $7, assignee_id = $8, reporter_id = $9, epic_id = $10,
         estimated_hours = $11, logged_hours = $12, story_points = $13, due_date = $14,
         updated_at = $15, subtasks = $16, worklogs = $17, comments = $18, tags = $19,
-        dependencies = $20, assignee_ids = $21
-      WHERE id = $22`,
+        dependencies = $20, assignee_ids = $21, parent_id = $22
+      WHERE id = $23`,
       [
         merged.key,
         merged.boardId,
@@ -825,6 +827,7 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
         JSON.stringify(merged.tags || []),
         JSON.stringify(merged.dependencies || []),
         JSON.stringify(assigneeIds),
+        merged.parentId || null,
         id,
       ]
     );

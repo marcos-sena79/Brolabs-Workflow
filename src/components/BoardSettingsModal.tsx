@@ -16,6 +16,8 @@ export const BoardSettingsModal: React.FC = () => {
     updateColumn,
     reorderColumns,
     deleteColumn,
+    updateBoard,
+    updateTask,
     refetchDbData,
   } = useAgile();
 
@@ -30,6 +32,10 @@ export const BoardSettingsModal: React.FC = () => {
   const [shareBusy, setShareBusy] = useState(false);
   const [shareError, setShareError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [epicKey, setEpicKey] = useState('');
+  const [epicName, setEpicName] = useState('');
+  const [epicColor, setEpicColor] = useState('#8b5cf6');
+  const [epicDesc, setEpicDesc] = useState('');
 
   useEffect(() => {
     if (!isBoardSettingsOpen || !currentBoard?.id) return;
@@ -117,6 +123,46 @@ export const BoardSettingsModal: React.FC = () => {
 
   const isPublic = share?.visibility === 'public';
 
+  // --- Épicos (catálogo do quadro — boards.epics) ---
+  const epics = currentBoard.epics || [];
+
+  const saveEpics = (next: typeof epics) => {
+    updateBoard(currentBoard.id, { epics: next });
+  };
+
+  const handleAddEpic = () => {
+    const name = epicName.trim();
+    if (!name) return;
+    saveEpics([
+      ...epics,
+      {
+        id: `epic-${Date.now()}`,
+        boardId: currentBoard.id,
+        key: epicKey.trim() || `EP-${epics.length + 1}`,
+        name,
+        color: epicColor,
+        description: epicDesc.trim(),
+      },
+    ]);
+    setEpicKey('');
+    setEpicName('');
+    setEpicDesc('');
+  };
+
+  const patchEpic = (epicId: string, patch: Partial<(typeof epics)[number]>) => {
+    saveEpics(epics.map((ep) => (ep.id === epicId ? { ...ep, ...patch } : ep)));
+  };
+
+  const handleDeleteEpic = (epicId: string) => {
+    const linked = boardTasks.filter((t) => t.epicId === epicId);
+    const msg = linked.length
+      ? `Remover o épico do catálogo? ${linked.length} tarefa(s) vinculada(s) perderão o vínculo.`
+      : 'Remover o épico do catálogo?';
+    if (!confirm(msg)) return;
+    saveEpics(epics.filter((ep) => ep.id !== epicId));
+    linked.forEach((t) => updateTask(t.id, { epicId: null }));
+  };
+
   const runShare = async (fn: () => Promise<void>) => {
     setShareBusy(true);
     setShareError('');
@@ -163,10 +209,10 @@ export const BoardSettingsModal: React.FC = () => {
         <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-slate-800">
           <div>
             <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
-              Colunas do Quadro
+              Configurações do Quadro
             </h3>
             <p className="text-[11px] text-slate-400">
-              {currentBoard.name} — personalize etapas, limites WIP e ordem do fluxo
+              {currentBoard.name} — colunas, épicos e link público
             </p>
           </div>
           <button
@@ -361,6 +407,119 @@ export const BoardSettingsModal: React.FC = () => {
           <p className="text-[10px] text-slate-400 mt-2">
             Limite de 30 colunas. Alterações são aplicadas imediatamente no quadro.
           </p>
+        </div>
+
+        {/* Épicos do quadro (catálogo boards.epics) */}
+        <div className="pt-3 border-t border-slate-100 dark:border-slate-800 space-y-2">
+          <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+            Épicos do Quadro
+          </p>
+
+          {epics.length === 0 ? (
+            <p className="text-[11px] text-slate-400">
+              Nenhum épico ainda — crie o primeiro para vincular em tarefas e histórias.
+            </p>
+          ) : (
+            <div className="space-y-1.5">
+              {epics.map((ep) => (
+                <div
+                  key={ep.id}
+                  className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800"
+                >
+                  <span
+                    className="w-3 h-3 rounded-full shrink-0 ring-1 ring-slate-900/10 dark:ring-white/20"
+                    style={{ backgroundColor: ep.color || '#8b5cf6' }}
+                  />
+                  <input
+                    defaultValue={ep.key}
+                    onBlur={(e) => {
+                      const key = e.target.value.trim();
+                      if (key && key !== ep.key) patchEpic(ep.id, { key });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    }}
+                    className="text-[11px] font-mono font-semibold px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-24"
+                    title="Chave do épico"
+                  />
+                  <input
+                    defaultValue={ep.name}
+                    onBlur={(e) => {
+                      const name = e.target.value.trim();
+                      if (name && name !== ep.name) patchEpic(ep.id, { name });
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                    }}
+                    className="text-xs font-semibold px-2 py-1 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 flex-1 min-w-32"
+                    title="Nome do épico"
+                  />
+                  <span className="text-[10px] text-slate-400 shrink-0">
+                    {boardTasks.filter((t) => t.epicId === ep.id).length} tarefa(s)
+                  </span>
+                  <button
+                    onClick={() => handleDeleteEpic(ep.id)}
+                    className="p-1 text-slate-400 hover:text-rose-600 rounded shrink-0"
+                    title="Remover épico do catálogo"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Novo épico */}
+          <div className="pt-2 border-t border-dashed border-slate-200 dark:border-slate-700">
+            <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2">
+              Novo Épico
+            </p>
+            <div className="flex items-center gap-2 flex-wrap">
+              <input
+                value={epicKey}
+                onChange={(e) => setEpicKey(e.target.value)}
+                placeholder={`EP-${epics.length + 1}`}
+                maxLength={50}
+                className="w-24 text-xs px-2.5 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+              <input
+                value={epicName}
+                onChange={(e) => setEpicName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleAddEpic();
+                }}
+                placeholder="Nome do épico (ex.: Autenticação & MFA)"
+                maxLength={255}
+                className="flex-1 min-w-44 text-xs px-2.5 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+              <input
+                value={epicDesc}
+                onChange={(e) => setEpicDesc(e.target.value)}
+                placeholder="Descrição (opcional)"
+                maxLength={500}
+                className="flex-1 min-w-40 text-xs px-2.5 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+              <select
+                value={epicColor}
+                onChange={(e) => setEpicColor(e.target.value)}
+                className="text-xs px-2 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200"
+              >
+                {PRESET_COLORS.concat(['#6366f1']).filter((c, i, a) => a.indexOf(c) === i).map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={handleAddEpic}
+                disabled={!epicName.trim()}
+                className="flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 ml-auto"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Adicionar
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Quadro público/privado (item 1.2) */}

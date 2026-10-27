@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, Plus, Sparkles } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { IssueType, Priority } from '../types';
+import { Epic, IssueType, Priority } from '../types';
 import { IssueTypeIcon } from './AgileIcons';
 import { getTodoColumnId } from '../utils/agileHelpers';
 import { normalizeAssigneeIds } from '../utils/taskAssignees';
@@ -17,6 +17,7 @@ export const CreateTaskModal: React.FC = () => {
     createTask,
     addSubtask,
     addDependency,
+    updateBoard,
     tagCatalog,
   } = useAgile();
 
@@ -27,6 +28,12 @@ export const CreateTaskModal: React.FC = () => {
   const [statusId, setStatusId] = useState(getTodoColumnId(currentBoard));
   const [assigneeIds, setAssigneeIds] = useState<string[]>([currentUser.id]);
   const [epicId, setEpicId] = useState('');
+  const [parentId, setParentId] = useState('');
+  const [showNewEpic, setShowNewEpic] = useState(false);
+  const [newEpicKey, setNewEpicKey] = useState('');
+  const [newEpicName, setNewEpicName] = useState('');
+  const [newEpicColor, setNewEpicColor] = useState('#8b5cf6');
+  const [registerEpicTask, setRegisterEpicTask] = useState(true);
   const [estimatedHours, setEstimatedHours] = useState('8');
   const [storyPoints, setStoryPoints] = useState('5');
   const [dueDate, setDueDate] = useState(
@@ -41,10 +48,27 @@ export const CreateTaskModal: React.FC = () => {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
+    if (showNewEpic && !newEpicName.trim()) return;
     const tags = tagInput
       .split(',')
       .map((t) => t.trim())
       .filter(Boolean);
+
+    // Épico novo no catálogo do quadro (se solicitado no select)
+    const extraEpics: Epic[] = [];
+    let chosenEpicId = epicId;
+    if (showNewEpic && newEpicName.trim()) {
+      const entry: Epic = {
+        id: `epic-${Date.now()}`,
+        boardId: currentBoard.id,
+        key: newEpicKey.trim() || `EP-${(currentBoard.epics?.length || 0) + 1}`,
+        name: newEpicName.trim(),
+        color: newEpicColor,
+        description: '',
+      };
+      extraEpics.push(entry);
+      chosenEpicId = entry.id;
+    }
 
     const created = createTask({
       title: title.trim(),
@@ -53,12 +77,28 @@ export const CreateTaskModal: React.FC = () => {
       priority,
       statusId,
       assigneeIds: normalizeAssigneeIds(assigneeIds, [currentUser.id]),
-      epicId: epicId || undefined,
+      epicId: chosenEpicId || undefined,
+      parentId: parentId || undefined,
       estimatedHours: parseFloat(estimatedHours) || 0,
       storyPoints: parseInt(storyPoints) || 0,
       dueDate,
       tags,
     });
+
+    // Tarefa criada como Épico entra no catálogo → passa a aparecer no seletor
+    if (issueType === 'epic' && registerEpicTask) {
+      extraEpics.push({
+        id: created.id,
+        boardId: currentBoard.id,
+        key: created.key,
+        name: title.trim(),
+        color: '#8b5cf6',
+        description: description.trim().slice(0, 500),
+      });
+    }
+    if (extraEpics.length > 0) {
+      updateBoard(currentBoard.id, { epics: [...(currentBoard.epics || []), ...extraEpics] });
+    }
 
     // Add initial blocker dependency if selected
     if (initialBlockerTaskId) {
@@ -81,6 +121,12 @@ export const CreateTaskModal: React.FC = () => {
     setDescription('');
     setQuickSubtasksInput('');
     setInitialBlockerTaskId('');
+    setEpicId('');
+    setParentId('');
+    setShowNewEpic(false);
+    setNewEpicKey('');
+    setNewEpicName('');
+    setRegisterEpicTask(true);
     setIsCreateModalOpen(false);
   };
 
@@ -260,7 +306,18 @@ export const CreateTaskModal: React.FC = () => {
               </label>
               <select
                 value={epicId}
-                onChange={(e) => setEpicId(e.target.value)}
+                onChange={(e) => {
+                  if (e.target.value === '__new__') {
+                    setShowNewEpic(true);
+                    setEpicId('');
+                    if (!newEpicKey) {
+                      setNewEpicKey(`EP-${(currentBoard.epics?.length || 0) + 1}`);
+                    }
+                  } else {
+                    setShowNewEpic(false);
+                    setEpicId(e.target.value);
+                  }
+                }}
                 className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
               >
                 <option value="">Sem Épico</option>
@@ -269,8 +326,77 @@ export const CreateTaskModal: React.FC = () => {
                     {ep.key}: {ep.name}
                   </option>
                 ))}
+                <option value="__new__">+ Novo épico…</option>
               </select>
             </div>
+          </div>
+
+          {/* Novo épico inline (catálogo do quadro) */}
+          {showNewEpic && (
+            <div className="p-3 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900 space-y-2">
+              <p className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
+                Novo épico no catálogo do quadro
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <input
+                  value={newEpicKey}
+                  onChange={(e) => setNewEpicKey(e.target.value)}
+                  placeholder="Chave (ex.: EP-4)"
+                  maxLength={50}
+                  className="w-28 text-xs px-2.5 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <input
+                  value={newEpicName}
+                  onChange={(e) => setNewEpicName(e.target.value)}
+                  placeholder="Nome do épico *"
+                  maxLength={255}
+                  autoFocus
+                  className="flex-1 min-w-40 text-xs px-2.5 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <select
+                  value={newEpicColor}
+                  onChange={(e) => setNewEpicColor(e.target.value)}
+                  className="text-xs px-2 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-900 dark:text-slate-100"
+                >
+                  {['#6366f1', '#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#ec4899', '#ef4444'].map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowNewEpic(false);
+                    setNewEpicName('');
+                  }}
+                  className="text-[11px] text-slate-500 hover:text-slate-700 px-2 py-1"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* História pai (Onda 2 — 2A) */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+              História pai (opcional)
+            </label>
+            <select
+              value={parentId}
+              onChange={(e) => setParentId(e.target.value)}
+              className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value="">Nenhuma (tarefa avulsa)</option>
+              {tasks
+                .filter((t) => t.boardId === currentBoard.id && t.issueType === 'story')
+                .map((t) => (
+                  <option key={t.id} value={t.id}>
+                    [{t.key}] {t.title.length > 60 ? `${t.title.substring(0, 60)}...` : t.title}
+                  </option>
+                ))}
+            </select>
           </div>
 
           {/* Time Tracking (Estimativa) & Due Date */}
@@ -394,6 +520,19 @@ export const CreateTaskModal: React.FC = () => {
               className="w-full text-xs font-mono px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
           </div>
+
+          {/* Auto-registro no catálogo ao criar item tipo Épico */}
+          {issueType === 'epic' && (
+            <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={registerEpicTask}
+                onChange={(e) => setRegisterEpicTask(e.target.checked)}
+                className="accent-indigo-600"
+              />
+              Adicionar ao catálogo de épicos do quadro (aparece no seletor "Épico" das tarefas)
+            </label>
+          )}
 
           <div className="flex justify-end gap-2 pt-2 border-t border-slate-200 dark:border-slate-800">
             <button

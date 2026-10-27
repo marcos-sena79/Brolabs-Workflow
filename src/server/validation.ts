@@ -85,8 +85,10 @@ const columnSchema = z.object({
 
 const epicSchema = z.object({
   id: idSchema,
+  key: z.string().trim().min(1).max(50).optional(),
   name: z.string().trim().min(1).max(255),
   color: z.string().max(50).optional(),
+  description: z.string().max(5000).optional(),
 });
 
 export const boardCreateSchema = z.object({
@@ -143,6 +145,7 @@ export const taskCreateSchema = z
     priority: z.string().min(1).max(50),
     statusId: z.string().min(1).max(100),
     assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
+    parentId: z.string().trim().min(1).max(100).optional(),
   })
   .passthrough();
 
@@ -151,6 +154,7 @@ export const taskUpdateSchema = z
     title: z.string().trim().min(1).max(500).optional(),
     statusId: z.string().min(1).max(100).optional(),
     assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
+    parentId: z.string().trim().min(1).max(100).nullable().optional(),
   })
   .passthrough();
 
