@@ -117,9 +117,6 @@ export const LoginPage: React.FC = () => {
           </form>
 
           <div className="mt-6 text-center">
-            <p className="text-sm text-slate-600 dark:text-slate-400">
-              Membros cadastrados: senha padrão <code className="text-indigo-600 dark:text-indigo-400">123456</code>
-            </p>
           </div>
         </div>
       </div>
