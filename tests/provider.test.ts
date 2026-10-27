@@ -115,7 +115,7 @@ describe('runAi (OpenRouter com fetch mockado)', () => {
     process.env.OPENROUTER_API_KEY = 'k1';
     vi.stubGlobal('fetch', vi.fn(() => openRouterResponse('   ')));
 
-    await expect(runAi('prompt')).rejects.toThrowError('Resposta vazia do modelo');
+    await expect(runAi('prompt')).rejects.toThrowError('Resposta vazia do modelo!');
   });
 
   it('sem provedor configurado → AiUnavailableError', async () => {
