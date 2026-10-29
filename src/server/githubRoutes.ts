@@ -133,7 +133,7 @@ githubRouter.get('/tasks/:id/commits', authenticateToken, async (req, res) => {
 
 /** Receiver público do GitHub (push). */
 githubRouter.post('/webhooks/github', async (req, res) => {
-  const rawBody: Buffer = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
+  const rawBody: Buffer = Buffer.isBuffer((req as any).rawBody) ? (req as any).rawBody : Buffer.from(JSON.stringify(req.body || {}));
 
   try {
     const event = String(req.headers[GITHUB_EVENT_HEADER] || '');
