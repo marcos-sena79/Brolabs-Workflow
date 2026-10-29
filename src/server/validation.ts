@@ -145,7 +145,7 @@ export const taskCreateSchema = z
     priority: z.string().min(1).max(50),
     statusId: z.string().min(1).max(100),
     assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
-    parentId: z.string().trim().min(1).max(100).optional(),
+    parentId: z.string().trim().min(1).max(100).nullable().optional(),
   })
   .passthrough();
 

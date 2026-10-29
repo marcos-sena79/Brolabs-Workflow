@@ -110,7 +110,13 @@ export const api = {
       headers: getAuthHeaders(),
       body: JSON.stringify(task),
     });
-    if (!res.ok) throw new Error('Falha ao criar tarefa no NeonDB');
+    if (!res.ok) {
+      const err = await res.json().catch(() => null);
+      const details = Array.isArray(err?.details)
+        ? ': ' + err.details.map((d: any) => `${d.field} ${d.message}`).join('; ')
+        : '';
+      throw new Error(`Falha ao criar tarefa no NeonDB${details}`);
+    }
     const data = await res.json();
     return data.task || task;
   },
