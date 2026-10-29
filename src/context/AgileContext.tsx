@@ -232,6 +232,7 @@ interface AgileContextType {
   deleteNote: (id: string) => void;
   createNoteFromSprint: () => Promise<Note>;
   runNoteAi: (id: string, action: NoteAiAction) => Promise<{ content: string }>;
+  runTaskAi: (id: string) => Promise<{ content: string }>;
 
   // Etiquetas globais (item 2.2)
   tagCatalog: TagDef[];
@@ -881,55 +882,8 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     setLastEmailAlertToast(null);
   };
 
-  // Helper to trigger communication webhooks
-  const dispatchIntegrationEvent = (
-    eventType: 'task_completed' | 'worklog_logged' | 'task_blocked' | 'sprint_started',
-    summary: string,
-    detailsObj: Record<string, unknown>
-  ) => {
-    integrations.forEach((integration) => {
-      if (!integration.enabled) return;
-
-      const shouldNotify =
-        (eventType === 'task_completed' && integration.notifyOnTaskComplete) ||
-        (eventType === 'worklog_logged' && integration.notifyOnWorklog) ||
-        (eventType === 'task_blocked' && integration.notifyOnTaskBlocked) ||
-        (eventType === 'sprint_started' && integration.notifyOnSprintStart);
-
-      if (!shouldNotify) return;
-
-      const logItem: WebhookLog = {
-        id: `wh-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        platform: integration.id,
-        eventType,
-        payloadSummary: `[${integration.name}] ${summary}`,
-        status: 'simulated',
-        timestamp: new Date().toISOString(),
-      };
-
-      setWebhookLogs((prev) => [logItem, ...prev.slice(0, 49)]);
-      api.createWebhookLog(logItem).catch(console.error);
-
-      if (integration.webhookUrl && integration.webhookUrl.startsWith('http')) {
-        try {
-          fetch(integration.webhookUrl, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              app: 'Brolabs Workflow',
-              event: eventType,
-              message: summary,
-              data: detailsObj,
-              timestamp: new Date().toISOString(),
-            }),
-            mode: 'no-cors',
-          }).catch(() => {});
-        } catch {
-          // ignore network error
-        }
-      }
-    });
-  };
+  // Webhooks agora são disparados pelo servidor (S2, item 5): o PUT/POST de tasks
+  // dispara os eventos no backend (webhook_logs com retry + whitelist anti-SSRF).
 
   // Create Task and persist to NeonDB
   const createTask = (taskData: {
@@ -1118,18 +1072,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       } catch {
         // confetti fallback
       }
-
-      dispatchIntegrationEvent(
-        'task_completed',
-        `🎉 Tarefa ${task.key} (${task.title}) foi concluída por ${currentUser.name}! [${task.loggedHours}h gastas de ${task.estimatedHours}h estimadas]`,
-        {
-          taskKey: task.key,
-          title: task.title,
-          completedBy: currentUser.name,
-          loggedHours: task.loggedHours,
-          estimatedHours: task.estimatedHours,
-        }
-      );
     }
   };
 
@@ -1361,28 +1303,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       memberName: currentUser.name,
       details: `Vínculo de dependência adicionado: ${relDescription}`,
     });
-
-    if (type === 'is_blocked_by' && !isTaskDone(currentBoard, targetTask.statusId)) {
-      dispatchIntegrationEvent(
-        'task_blocked',
-        `⚠️ ${sourceTask.key} foi marcada como bloqueada por ${targetTask.key} (${targetTask.title})`,
-        {
-          blockedTaskKey: sourceTask.key,
-          blockerTaskKey: targetTask.key,
-          linkedBy: currentUser.name,
-        }
-      );
-    } else if (type === 'blocks' && !isTaskDone(currentBoard, sourceTask.statusId)) {
-      dispatchIntegrationEvent(
-        'task_blocked',
-        `⚠️ ${targetTask.key} está bloqueada por ${sourceTask.key} (${sourceTask.title})`,
-        {
-          blockedTaskKey: targetTask.key,
-          blockerTaskKey: sourceTask.key,
-          linkedBy: currentUser.name,
-        }
-      );
-    }
   };
 
   const removeDependency = (taskId: string, targetTaskId: string) => {
@@ -1462,19 +1382,6 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         memberName: currentUser.name,
         details: `Registrou ${hours}h (${newLog.comment}). Total na tarefa: ${totalLoggedNow}h / ${task.estimatedHours}h`,
       });
-
-      dispatchIntegrationEvent(
-        'worklog_logged',
-        `⏱ ${currentUser.name} registrou ${hours}h na tarefa ${task.key} (${task.title}). Total: ${totalLoggedNow}h/${task.estimatedHours}h`,
-        {
-          taskKey: task.key,
-          member: currentUser.name,
-          loggedHours: hours,
-          totalLogged: totalLoggedNow,
-          estimated: task.estimatedHours,
-          comment,
-        }
-      );
     }
   };
 
@@ -1827,34 +1734,40 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const target = integrations.find((i) => i.id === platform);
     if (!target) return false;
 
-    const newLog: WebhookLog = {
-      id: `wh-${Date.now()}`,
-      platform,
-      eventType: 'test_ping',
-      payloadSummary: `[Teste] Disparo simulado com sucesso para ${target.name} (${target.channelName})`,
-      status: 'simulated',
-      timestamp: new Date().toISOString(),
-    };
+    try {
+      const result = await api.testWebhook(platform);
+      if (result.log) setWebhookLogs((prev) => [result.log as WebhookLog, ...prev.slice(0, 49)]);
+      if (result.integration) {
+        setIntegrations((prev) =>
+          prev.map((i) =>
+            i.id === platform
+              ? {
+                  ...i,
+                  lastTestedAt: result.integration!.lastTestedAt,
+                  lastTestStatus: result.integration!.lastTestStatus,
+                }
+              : i
+          )
+        );
+      }
 
-    setWebhookLogs((prev) => [newLog, ...prev]);
-    api.createWebhookLog(newLog).catch(console.error);
+      logActivity({
+        type: 'webhook_dispatched',
+        taskId: 'system',
+        taskKey: 'INTEG',
+        taskTitle: `Disparo de teste ${target.name}`,
+        memberId: currentUser.id,
+        memberName: currentUser.name,
+        details: `Ping de teste para ${target.name} (${target.channelName}): ${
+          result.success ? 'entregue' : `falhou (${result.error || 'erro'})`
+        }`,
+      });
 
-    updateIntegrationConfig(platform, {
-      lastTestedAt: new Date().toISOString(),
-      lastTestStatus: 'success',
-    });
-
-    logActivity({
-      type: 'webhook_dispatched',
-      taskId: 'system',
-      taskKey: 'INTEG',
-      taskTitle: `Disparo de teste ${target.name}`,
-      memberId: currentUser.id,
-      memberName: currentUser.name,
-      details: `Enviou ping de teste para o canal ${target.channelName}`,
-    });
-
-    return true;
+      return result.success;
+    } catch (err) {
+      console.error('Teste de webhook falhou:', err);
+      return false;
+    }
   };
 
   // ---------------------- To-Do do dia (item 2.4) ---------------------- //
@@ -1951,6 +1864,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const runNoteAi = (id: string, action: NoteAiAction) => api.runNoteAi(id, action);
+  const runTaskAi = (id: string) => api.runTaskAi(id);
 
   // ---------------------- Etiquetas globais (item 2.2) ---------------------- //
 
@@ -2182,6 +2096,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         deleteNote,
         createNoteFromSprint,
         runNoteAi,
+  runTaskAi,
         tagCatalog,
         fetchTags,
         createTag,

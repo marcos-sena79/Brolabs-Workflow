@@ -186,6 +186,9 @@ export interface IntegrationConfig {
   notifyOnWorklog: boolean;
   notifyOnTaskBlocked: boolean;
   notifyOnSprintStart: boolean;
+  notifyOnMention?: boolean;
+  notifyOnAssignment?: boolean;
+  memberHandles?: Record<string, string>;
   lastTestedAt?: string;
   lastTestStatus?: 'success' | 'failed';
 }
@@ -195,8 +198,11 @@ export interface WebhookLog {
   platform: IntegrationPlatform;
   eventType: string;
   payloadSummary: string;
-  status: 'delivered' | 'simulated';
+  status: 'delivered' | 'failed' | 'pending' | 'simulated';
   timestamp: string;
+  attempts?: number;
+  responseStatus?: number | null;
+  error?: string | null;
 }
 
 export type ViewTab =

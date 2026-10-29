@@ -28,6 +28,8 @@ import {
   CheckCircle2,
   ExternalLink,
   Archive,
+  Sparkles,
+  RefreshCw,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { IssueType, Priority, Task, DependencyType } from '../types';
@@ -70,6 +72,7 @@ export const TaskModal: React.FC = () => {
     pauseTimer,
     archiveTask,
     can,
+    runTaskAi,
   } = useAgile();
 
   const task = tasks.find((t) => t.id === selectedTaskModalId);
@@ -100,7 +103,26 @@ export const TaskModal: React.FC = () => {
   const [newDepType, setNewDepType] = useState<DependencyType>('is_blocked_by');
   const [newDepTargetId, setNewDepTargetId] = useState('');
 
+  // IA: análise da tarefa (S2, item 7)
+  const [aiRunning, setAiRunning] = useState(false);
+  const [aiResult, setAiResult] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiCopied, setAiCopied] = useState(false);
+
   if (!task) return null;
+
+  const runAnalysis = async () => {
+    setAiRunning(true);
+    setAiError(null);
+    try {
+      const { content } = await runTaskAi(task.id);
+      setAiResult(content);
+    } catch (err: any) {
+      setAiError(err?.message || 'Falha na análise');
+    } finally {
+      setAiRunning(false);
+    }
+  };
 
   const currentColumn = currentBoard.columns.find((c) => c.id === task.statusId);
   const assignee = members.find((m) => m.id === task.assigneeId);
@@ -300,6 +322,23 @@ export const TaskModal: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2">
+            {/* Analisar com IA (S2, item 7) */}
+            {can('canEditTask', task.boardId) && (
+              <button
+                onClick={runAnalysis}
+                disabled={aiRunning}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md font-medium transition-colors bg-violet-50 dark:bg-violet-950/50 text-violet-700 dark:text-violet-300 border border-violet-200 dark:border-violet-900 hover:bg-violet-100 dark:hover:bg-violet-950 disabled:opacity-60"
+                title="Analisar tarefa com IA (erros de interpretação, riscos, próximos passos)"
+              >
+                {aiRunning ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Sparkles className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">{aiRunning ? 'Analisando…' : 'Analisar com IA'}</span>
+              </button>
+            )}
+
             {/* Quick Live Timer trigger inside modal */}
             <button
               onClick={() => {
@@ -401,6 +440,51 @@ export const TaskModal: React.FC = () => {
                 className="w-full text-xs text-slate-800 dark:text-slate-200 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-lg border border-slate-200 dark:border-slate-700/80 focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
               />
             </div>
+
+            {/* Análise com IA (S2, item 7) */}
+            {(aiResult || aiError || aiRunning) && (
+              <div className="bg-violet-50/60 dark:bg-violet-950/30 p-4 rounded-xl border border-violet-200 dark:border-violet-900 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-violet-700 dark:text-violet-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5" /> Análise de IA
+                  </span>
+                  <div className="flex items-center gap-3">
+                    {aiResult && (
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(aiResult);
+                          setAiCopied(true);
+                          setTimeout(() => setAiCopied(false), 2000);
+                        }}
+                        className="text-[11px] text-violet-600 dark:text-violet-400 hover:underline flex items-center gap-1"
+                      >
+                        {aiCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        {aiCopied ? 'Copiado' : 'Copiar'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setAiResult(null);
+                        setAiError(null);
+                      }}
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                      title="Fechar análise"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                {aiError && <p className="text-xs text-rose-600 dark:text-rose-400">{aiError}</p>}
+                {aiRunning && !aiResult && (
+                  <p className="text-xs text-slate-500 italic">Analisando a tarefa…</p>
+                )}
+                {aiResult && (
+                  <div className="max-h-72 overflow-y-auto whitespace-pre-wrap text-xs text-slate-800 dark:text-slate-200 leading-relaxed">
+                    {aiResult}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* SUB-TAREFAS (SUBTASKS) */}
             {/* SUB-TAREFAS (SUBTASKS) */}

@@ -31,12 +31,28 @@ import { NotesView } from './components/NotesView';
 import { PublicBoardView } from './components/PublicBoardView';
 
 const AppContent: React.FC = () => {
-  const { currentView } = useAgile();
+  const { currentView, tasks, setSelectedTaskModalId } = useAgile();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(false);
 
   React.useEffect(() => {
     setIsSidebarOpen(false);
   }, [currentView]);
+
+  // Link profundo de webhook/e-mail: /?task=<id> abre o modal da tarefa (S2, item 5)
+  const pendingTaskRef = React.useRef<string | null>(
+    new URLSearchParams(window.location.search).get('task')
+  );
+  React.useEffect(() => {
+    const wanted = pendingTaskRef.current;
+    if (!wanted) return;
+    if (tasks.some((t) => t.id === wanted)) {
+      pendingTaskRef.current = null;
+      setSelectedTaskModalId(wanted);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('task');
+      window.history.replaceState({}, '', url.toString());
+    }
+  }, [tasks, setSelectedTaskModalId]);
 
   const renderCurrentView = () => {
     switch (currentView) {

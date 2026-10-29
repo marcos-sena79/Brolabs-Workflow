@@ -28,6 +28,7 @@ export const IntegrationsView: React.FC = () => {
     webhookLogs,
     currentBoard,
     currentUser,
+    members,
     setIsEmailDrawerOpen,
   } = useAgile();
 
@@ -180,7 +181,7 @@ export const IntegrationsView: React.FC = () => {
         <div className="flex items-center gap-2 text-xs">
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Envio pelo navegador
+            Envio pelo servidor · retry automático · whitelist de domínios
           </span>
         </div>
       </div>
@@ -298,8 +299,58 @@ export const IntegrationsView: React.FC = () => {
                     />
                     <span>Abertura de Sprint</span>
                   </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={config.notifyOnMention ?? false}
+                      onChange={(e) => updateIntegrationConfig(config.id, { notifyOnMention: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span>Menção (@membro)</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-700 dark:text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={config.notifyOnAssignment ?? false}
+                      onChange={(e) => updateIntegrationConfig(config.id, { notifyOnAssignment: e.target.checked })}
+                      className="rounded text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <span>Novo Responsável</span>
+                  </label>
                 </div>
               </div>
+
+              {/* Mapeamento membro → handle (S2, item 5) */}
+              <details className="pt-2 border-t border-slate-100 dark:border-slate-800 text-xs">
+                <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-wider text-slate-400 select-none">
+                  Handles de menção (@membro no chat)
+                </summary>
+                <div className="mt-2 space-y-1.5 max-h-36 overflow-y-auto">
+                  {members.map((m) => (
+                    <div key={m.id} className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-600 dark:text-slate-300 w-28 truncate" title={m.name}>
+                        {m.name}
+                      </span>
+                      <input
+                        type="text"
+                        value={config.memberHandles?.[m.id] || ''}
+                        onChange={(e) =>
+                          updateIntegrationConfig(config.id, {
+                            memberHandles: { ...(config.memberHandles || {}), [m.id]: e.target.value },
+                          })
+                        }
+                        placeholder="@handle"
+                        className="flex-1 font-mono text-[11px] px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  ))}
+                  {members.length === 0 && (
+                    <p className="text-[11px] text-slate-400 italic">Nenhum membro cadastrado.</p>
+                  )}
+                </div>
+              </details>
 
               {/* Action Buttons */}
               <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -481,13 +532,34 @@ export const IntegrationsView: React.FC = () => {
                     <span className="font-bold text-slate-800 dark:text-slate-200 uppercase font-mono text-[10px]">
                       {log.platform}
                     </span>
-                    <span className="text-[10px] text-emerald-600 bg-emerald-50 dark:bg-emerald-950 px-1.5 py-0.2 rounded font-semibold">
-                      {log.status === 'delivered' ? 'Entregue' : 'Simulado'}
+                    <span
+                      className={`text-[10px] px-1.5 py-0.2 rounded font-semibold ${
+                        log.status === 'delivered'
+                          ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950'
+                          : log.status === 'pending'
+                            ? 'text-amber-600 bg-amber-50 dark:bg-amber-950'
+                            : log.status === 'failed'
+                              ? 'text-rose-600 bg-rose-50 dark:bg-rose-950'
+                              : 'text-slate-500 bg-slate-100 dark:bg-slate-800'
+                      }`}
+                      title={log.error || undefined}
+                    >
+                      {log.status === 'delivered'
+                        ? 'Entregue'
+                        : log.status === 'pending'
+                          ? 'Pendente'
+                          : log.status === 'failed'
+                            ? 'Falhou'
+                            : 'Simulado'}
+                      {log.attempts && log.attempts > 1 ? ` · ${log.attempts}x` : ''}
                     </span>
                   </div>
                   <span className="text-[10px] text-slate-400 font-mono">{formatRelativeTime(log.timestamp)}</span>
                 </div>
                 <p className="text-slate-600 dark:text-slate-300 text-xs leading-relaxed">{log.payloadSummary}</p>
+                {log.status === 'failed' && log.error && (
+                  <p className="text-rose-500 text-[10px] font-mono break-all">{log.error}</p>
+                )}
               </div>
             ))}
 

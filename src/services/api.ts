@@ -755,7 +755,35 @@ export const api = {
       body: JSON.stringify({ action }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || 'Falha ao executar ação de IA');
+    if (!res.ok) throw new Error(data?.error || 'Falha ao executar a��ǜo de IA');
+    return data;
+  },
+
+  async runTaskAi(id: string): Promise<{ content: string }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/analyze`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha na análise de IA');
+    return data;
+  },
+
+  async testWebhook(id: string): Promise<{
+    success: boolean;
+    log: WebhookLog | null;
+    integration?: { id: string; lastTestedAt: string; lastTestStatus: 'success' | 'failed' };
+    error?: string;
+  }> {
+    const res = await fetch(`/api/webhooks/test/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 401 || res.status === 403 || res.status === 400 || res.status === 404) {
+      throw new Error(data?.error || 'Falha no teste de webhook');
+    }
     return data;
   },
 

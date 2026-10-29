@@ -158,6 +158,24 @@ export const taskUpdateSchema = z
   })
   .passthrough();
 
+// --- Integrações / webhooks (S2, item 5) ---
+
+export const integrationUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(100).optional(),
+    enabled: z.boolean().optional(),
+    webhookUrl: z.union([z.string().trim().max(2048), z.literal('')]).optional(),
+    channelName: z.string().trim().max(150).optional(),
+    notifyOnTaskComplete: z.boolean().optional(),
+    notifyOnWorklog: z.boolean().optional(),
+    notifyOnTaskBlocked: z.boolean().optional(),
+    notifyOnSprintStart: z.boolean().optional(),
+    notifyOnMention: z.boolean().optional(),
+    notifyOnAssignment: z.boolean().optional(),
+    memberHandles: z.record(z.string().max(100), z.string().max(100)).optional(),
+  })
+  .passthrough();
+
 // --- Email settings ---
 
 export const emailSettingsSchema = z

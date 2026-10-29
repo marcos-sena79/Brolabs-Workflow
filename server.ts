@@ -49,6 +49,7 @@ import {
   shareCreateSchema,
   tagCreateSchema,
   tagUpdateSchema,
+  integrationUpdateSchema,
 } from './src/server/validation';
 import {
   resolvePermissions,
@@ -88,6 +89,12 @@ import {
   AiUnavailableError,
   AiFailedError,
 } from './src/server/ai/provider';
+import {
+  dispatchEvent,
+  processWebhookOutbox,
+  testIntegration,
+  verifyIncomingSignature,
+} from './src/server/webhooks/dispatcher';
 import { logger } from './src/server/logger';
 import { migrationsSummary } from './src/server/migrate';
 
@@ -101,7 +108,7 @@ const PORT = 3000;
 const isProduction = process.env.NODE_ENV === 'production';
 const isVercel = Boolean(process.env.VERCEL);
 
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '10mb', verify: (req: any, _res, buf) => { req.rawBody = buf; } }));
 app.use(cookieParser());
 
 // Storage Bucket for member avatars and assets (served by Vite from /public)
@@ -347,6 +354,9 @@ function mapDbIntegration(row: any) {
     notifyOnWorklog: Boolean(row.notify_on_worklog),
     notifyOnTaskBlocked: Boolean(row.notify_on_task_blocked),
     notifyOnSprintStart: Boolean(row.notify_on_sprint_start),
+    notifyOnMention: Boolean(row.notify_on_mention),
+    notifyOnAssignment: Boolean(row.notify_on_assignment),
+    memberHandles: row.member_handles || {},
     lastTestedAt: row.last_tested_at || undefined,
     lastTestStatus: row.last_test_status || undefined,
   };
@@ -360,6 +370,9 @@ function mapDbWebhookLog(row: any) {
     payloadSummary: row.payload_summary,
     status: row.status,
     timestamp: row.timestamp,
+    attempts: Number(row.attempts) || 0,
+    responseStatus: row.response_status ?? null,
+    error: row.error || null,
   };
 }
 
@@ -696,6 +709,230 @@ async function ensureTagsExist(tags: any, memberId: string): Promise<void> {
 
 // --- TASKS ENDPOINTS --- //
 
+// --- Eventos server-side de webhook (S2, item 5) ---
+// O dispatch deixou de ser client-side: o servidor detecta mudanças no PUT/POST
+// de tasks e enfileira a entrega (webhook_logs com retry + whitelist anti-SSRF).
+
+function taskDeepLink(taskId: string): string {
+  const base = (process.env.APP_URL || '').replace(/\/$/, '');
+  return `${base}/?task=${taskId}`;
+}
+
+function escHtml(s: string): string {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+async function resolveMentionMembers(
+  comments: any[],
+  authorId: string
+): Promise<{ memberId: string; name: string }[]> {
+  const texts = comments.map((c) => String(c.text || '')).join(' ');
+  const raw = [
+    ...new Set(
+      (texts.match(/@([a-zA-Z0-9_\u00C0-\u00FF.-]+)/g) || []).map((s) => s.slice(1).toLowerCase())
+    ),
+  ];
+  if (!raw.length) return [];
+  const memRes = await query('SELECT id, name, email FROM members');
+  const members = memRes.rows;
+  const groups = ['todos', 'equipe', 'time', 'all', 'squad'];
+  if (raw.some((m) => groups.includes(m))) {
+    return members.filter((m) => m.id !== authorId).map((m) => ({ memberId: m.id, name: m.name }));
+  }
+  const found = new Map<string, { memberId: string; name: string }>();
+  for (const q of raw) {
+    if (!q) continue;
+    for (const mem of members) {
+      const firstName = String(mem.name || '').split(' ')[0].toLowerCase();
+      const fullName = String(mem.name || '').toLowerCase();
+      const emailPrefix = String(mem.email || '').split('@')[0].toLowerCase();
+      const match =
+        (firstName && (firstName.includes(q) || q.includes(firstName))) ||
+        (fullName && (fullName.includes(q) || q.includes(fullName))) ||
+        (emailPrefix && (emailPrefix.includes(q) || q.includes(emailPrefix)));
+      if (match) found.set(mem.id, { memberId: mem.id, name: mem.name });
+    }
+  }
+  return [...found.values()];
+}
+
+async function notifyAssignment(task: any, newAssigneeIds: string[]): Promise<void> {
+  try {
+    const memRes = await query('SELECT id, name, email FROM members WHERE id = ANY($1)', [
+      newAssigneeIds,
+    ]);
+    const added = memRes.rows;
+    if (!added.length) return;
+
+    const link = taskDeepLink(task.id);
+    dispatchEvent(
+      'task_assigned',
+      `\u{1F4CC} ${task.key}: {mentions} agora é responsável pela tarefa "${task.title}" — ${link}`,
+      { taskKey: task.key, title: task.title, assigned: added.map((m: any) => m.name).join(', '), link },
+      added.map((m: any) => ({ memberId: m.id, name: m.name }))
+    );
+
+    // Atribuição também por e-mail (outbox existente, dedupe 5 min)
+    const settingsRes = await query('SELECT * FROM email_settings LIMIT 1');
+    const settings = settingsRes.rows[0];
+    if (!settings?.enabled) return;
+    for (const m of added) {
+      if (!m.email) continue;
+      try {
+        const dup = await query(
+          `SELECT 1 FROM email_notifications
+           WHERE task_id = $1 AND trigger_type = 'assignment' AND recipient_email = $2
+             AND created_at > NOW() - INTERVAL '5 minutes'`,
+          [task.id, m.email]
+        );
+        if (dup.rowCount) continue;
+        const subject = `Você foi designado(a) à tarefa ${task.key}`;
+        const preview = `${task.title} — abra a tarefa no Brolabs Workflow.`;
+        const html = `<p>Olá ${escHtml(m.name)},</p><p>Você foi designado(a) à tarefa <strong>${escHtml(task.key)} — ${escHtml(task.title)}</strong>.</p>`;
+        await query(
+          `INSERT INTO email_notifications
+             (id, trigger_type, task_id, task_key, task_title, recipient_email, recipient_name,
+              sender_name, subject, content_preview, html_body, status, timestamp, read, member_id, created_at)
+           VALUES ($1, 'assignment', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, false, $12, now())`,
+          [
+            `em-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+            task.id,
+            task.key,
+            task.title,
+            m.email,
+            m.name,
+            settings.sender_name || 'Brolabs Workflow',
+            subject,
+            preview,
+            html,
+            new Date().toISOString(),
+            m.id,
+          ]
+        );
+      } catch (e: any) {
+        console.error('assignment email enqueue falhou:', e?.message || e);
+      }
+    }
+    if (smtpConfigured()) await processOutbox(5).catch(() => {});
+  } catch (e: any) {
+    console.error('notifyAssignment falhou:', e?.message || e);
+  }
+}
+
+async function fireTaskUpdateEvents(current: any, merged: any, updates: any): Promise<void> {
+  try {
+    // Tarefa movida para a coluna concluída
+    if (updates.statusId && updates.statusId !== current.statusId) {
+      const boardRes = await query('SELECT columns FROM boards WHERE id = $1', [current.boardId]);
+      const cols = safeJson(boardRes.rows[0]?.columns, []);
+      const doneColId = cols.find((c: any) => c.isDone)?.id ?? 'col-done';
+      if (merged.statusId === doneColId) {
+        dispatchEvent(
+          'task_completed',
+          `\u2705 Tarefa ${merged.key} concluída: ${merged.title} — ${taskDeepLink(merged.id)}`,
+          {
+            taskKey: merged.key,
+            title: merged.title,
+            link: taskDeepLink(merged.id),
+          }
+        );
+      }
+    }
+
+    // Novo worklog
+    if ('worklogs' in updates) {
+      const before = (current.worklogs || []).length;
+      const after = (merged.worklogs || []).length;
+      if (after > before) {
+        dispatchEvent(
+          'worklog_logged',
+          `\u23F1 Novo apontamento em ${merged.key} (${merged.title}) — ${after - before} registro(s) — ${taskDeepLink(merged.id)}`,
+          {
+            taskKey: merged.key,
+            title: merged.title,
+            newLogs: after - before,
+            link: taskDeepLink(merged.id),
+          }
+        );
+      }
+    }
+
+    // Novo bloqueio (dependência is_blocked_by adicionada)
+    if ('dependencies' in updates) {
+      const before = new Set(
+        (current.dependencies || []).map((d: any) => `${d.type}:${d.targetTaskId}`)
+      );
+      const added = (merged.dependencies || []).filter(
+        (d: any) => d.type === 'is_blocked_by' && !before.has(`is_blocked_by:${d.targetTaskId}`)
+      );
+      if (added.length) {
+        dispatchEvent(
+          'task_blocked',
+          `\u26D4 ${merged.key} marcada como bloqueada (${added.length} nova(s) dependência(s)) — ${taskDeepLink(merged.id)}`,
+          {
+            taskKey: merged.key,
+            title: merged.title,
+            blockers: added.map((d: any) => d.targetTaskId),
+            link: taskDeepLink(merged.id),
+          }
+        );
+      }
+    }
+
+    // Novos responsáveis (webhook + e-mail)
+    if ('assigneeIds' in updates || 'assigneeId' in updates) {
+      const before = new Set(current.assigneeIds || []);
+      const addedIds = (merged.assigneeIds || []).filter((id: string) => id && !before.has(id));
+      if (addedIds.length) await notifyAssignment(merged, addedIds);
+    }
+
+    // Menções em comentários novos
+    if ('comments' in updates) {
+      const beforeIds = new Set((current.comments || []).map((c: any) => c.id));
+      const newComments = (merged.comments || []).filter((c: any) => !beforeIds.has(c.id));
+      if (newComments.length) {
+        const mentioned = await resolveMentionMembers(
+          newComments,
+          newComments[0]?.authorId || ''
+        );
+        if (mentioned.length) {
+          const list = mentioned.map((m) => m.name).join(', ');
+          dispatchEvent(
+            'mention',
+            `\u{1F4AC} Em ${merged.key} ("${merged.title}"): {mentions} — ${taskDeepLink(merged.id)}`,
+            {
+              taskKey: merged.key,
+              title: merged.title,
+              mentioned: list,
+              link: taskDeepLink(merged.id),
+            },
+            mentioned
+          );
+        }
+      }
+    }
+  } catch (e: any) {
+    console.error('fireTaskUpdateEvents falhou:', e?.message || e);
+  }
+}
+
+async function handleTaskCreatedEvents(task: any): Promise<void> {
+  try {
+    const ids = task.assigneeIds?.length
+      ? task.assigneeIds
+      : task.assigneeId
+        ? [task.assigneeId]
+        : [];
+    if (ids.length) await notifyAssignment(task, ids);
+  } catch (e: any) {
+    console.error('handleTaskCreatedEvents falhou:', e?.message || e);
+  }
+}
+
 app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'), validateBody(taskCreateSchema), async (req, res) => {
   try {
     const t = req.body;
@@ -743,6 +980,8 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
     if (Array.isArray(t.tags) && t.tags.length) {
       await ensureTagsExist(t.tags, req.memberId!).catch(() => {});
     }
+
+    void handleTaskCreatedEvents(t);
 
     res.status(201).json({ success: true, task: t });
   } catch (error: any) {
@@ -836,10 +1075,108 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
       await ensureTagsExist(updates.tags, req.memberId!).catch(() => {});
     }
 
+    void fireTaskUpdateEvents(current, merged, updates);
+
     res.json({ success: true, task: merged });
   } catch (error: any) {
     console.error('Error updating task:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Item 7 (S2): Análise de tarefa com IA ---
+app.post('/api/tasks/:id/analyze', authenticateToken, async (req, res) => {
+  const memberId = req.memberId!;
+  let inputChars = 0;
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [req.params.id]);
+    if (!taskRes.rows.length) return res.status(404).json({ error: 'Tarefa não encontrada' });
+    const task = mapDbTask(taskRes.rows[0]);
+
+    const eff = await resolvePermissions(memberId, task.boardId);
+    if (!eff || !eff.canEditTask) {
+      return res.status(403).json({ error: 'Sem permissão para analisar esta tarefa' });
+    }
+
+    if (!aiConfigured()) {
+      await logAiUsage(memberId, 'task_analyze', 0, 0, 'error');
+      return res.status(503).json({ error: 'IA não configurada', unavailable: true });
+    }
+
+    const retryAfter = await checkAiRateLimit(memberId);
+    if (retryAfter) {
+      await logAiUsage(memberId, 'task_analyze', 0, 0, 'rate_limited');
+      const minutes = Math.max(1, Math.ceil((retryAfter.getTime() - Date.now()) / 60000));
+      return res
+        .status(429)
+        .json({ error: `Limite de 20 usos/h atingido. Tente em ${minutes} min`, retryAfterMinutes: minutes });
+    }
+
+    const boardRes = await query('SELECT columns FROM boards WHERE id = $1', [task.boardId]);
+    const cols = safeJson(boardRes.rows[0]?.columns, []);
+    const statusTitle = cols.find((c: any) => c.id === task.statusId)?.title || task.statusId;
+    const memRes = await query('SELECT id, name FROM members');
+    const nameOf = (id: string) => memRes.rows.find((m: any) => m.id === id)?.name || id || '(sem autor)';
+
+    const comments =
+      (task.comments || [])
+        .slice(-5)
+        .map((c: any) => `- ${nameOf(c.authorId)}: ${String(c.text || '').slice(0, 500)}`)
+        .join('\n') || '(sem comentários)';
+    const subtasks =
+      (task.subtasks || [])
+        .map((s: any) => `- [${s.completed ? 'x' : ' '}] ${s.title}`)
+        .join('\n') || '(nenhuma)';
+    const deps =
+      (task.dependencies || [])
+        .map((d: any) => `- ${d.type} → ${d.targetTaskId}`)
+        .join('\n') || '(nenhuma)';
+    const worklogs =
+      (task.worklogs || [])
+        .map((w: any) => `- ${nameOf(w.memberId)}: ${w.hours}h em ${w.date}`)
+        .join('\n') || '(nenhum)';
+    const assignees = (task.assigneeIds || []).filter(Boolean).map(nameOf).join(', ') || 'nenhum';
+
+    const context = `Tarefa: ${task.key} — ${task.title}
+Status: ${statusTitle} | Prioridade: ${task.priority} | Tipo: ${task.issueType}
+Prazo: ${task.dueDate || 'sem prazo'} | Pontos: ${task.storyPoints || 0} | Estimado: ${task.estimatedHours || 0}h | Apontado: ${task.loggedHours || 0}h
+Responsáveis: ${assignees}
+Descrição: ${task.description || '(vazia)'}
+Sub-tarefas:
+${subtasks}
+Dependências:
+${deps}
+Comentários recentes:
+${comments}
+Worklogs:
+${worklogs}`;
+
+    inputChars = context.length;
+    const prompt = `Analise a tarefa abaixo do ponto de vista de gestão de projeto (pt-BR, markdown limpo, sem preâmbulo).
+Aponte: (1) erros de interpretação ou ambiguidades na descrição; (2) informações que faltam; (3) riscos e dependências não tratadas; (4) boas práticas e próximos passos concretos.
+Se a descrição estiver vazia ou muito curta, APONTE a falta de contexto em vez de inventar conteúdo. Não invente dados que não estejam no contexto.
+
+<<<TAREFA>>>
+${context.slice(0, 20000)}
+<<<END>>>`;
+
+    const output = await runAi(prompt);
+    await logAiUsage(memberId, 'task_analyze', inputChars, output.length, 'ok');
+    res.json({
+      content: output,
+      usage: {
+        action: 'task_analyze',
+        inputChars,
+        outputChars: output.length,
+        provider: aiProvider(),
+        model: aiModel(),
+      },
+    });
+  } catch (error: any) {
+    const status = error instanceof AiUnavailableError ? 503 : 502;
+    await logAiUsage(memberId, 'task_analyze', inputChars, 0, 'error').catch(() => {});
+    console.error('Task analyze failed:', error);
+    res.status(status).json({ error: error.message || 'Falha na IA' });
   }
 });
 
@@ -1682,7 +2019,7 @@ app.post('/api/activities', authenticateToken, async (req, res) => {
 
 // --- INTEGRATIONS --- //
 
-app.put('/api/integrations/:id', authenticateToken, requireAdmin(), async (req, res) => {
+app.put('/api/integrations/:id', authenticateToken, requireAdmin(), validateBody(integrationUpdateSchema), async (req, res) => {
   try {
     const { id } = req.params;
     const updates = req.body;
@@ -1699,8 +2036,9 @@ app.put('/api/integrations/:id', authenticateToken, requireAdmin(), async (req, 
       `UPDATE integrations SET
         name = $1, enabled = $2, webhook_url = $3, channel_name = $4,
         notify_on_task_complete = $5, notify_on_worklog = $6, notify_on_task_blocked = $7,
-        notify_on_sprint_start = $8, last_tested_at = $9, last_test_status = $10
-      WHERE id = $11`,
+        notify_on_sprint_start = $8, last_tested_at = $9, last_test_status = $10,
+        notify_on_mention = $11, notify_on_assignment = $12, member_handles = $13
+      WHERE id = $14`,
       [
         merged.name,
         merged.enabled,
@@ -1712,6 +2050,9 @@ app.put('/api/integrations/:id', authenticateToken, requireAdmin(), async (req, 
         merged.notifyOnSprintStart,
         merged.lastTestedAt || null,
         merged.lastTestStatus || null,
+        merged.notifyOnMention,
+        merged.notifyOnAssignment,
+        JSON.stringify(merged.memberHandles || {}),
         id,
       ]
     );
@@ -1734,6 +2075,211 @@ app.post('/api/webhooks', authenticateToken, requireAdmin(), async (req, res) =>
     res.status(201).json({ success: true, webhookLog: w });
   } catch (error: any) {
     console.error('Error creating webhook log:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// --- Teste de disparo REAL (S2, item 5): entrega de verdade + status real --- //
+app.post('/api/webhooks/test/:id', authenticateToken, requireAdmin(), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const result = await testIntegration(id);
+    const now = new Date().toISOString();
+    const lastStatus = result.status === 'delivered' ? 'success' : 'failed';
+    await query(`UPDATE integrations SET last_tested_at = $1, last_test_status = $2 WHERE id = $3`, [
+      now,
+      lastStatus,
+      id,
+    ]);
+    const logRes = await query('SELECT * FROM webhook_logs WHERE id = $1', [result.logId]);
+    res.json({
+      success: result.status === 'delivered',
+      integration: { id, lastTestedAt: now, lastTestStatus: lastStatus },
+      log: logRes.rows[0] ? mapDbWebhookLog(logRes.rows[0]) : null,
+      error: result.error,
+    });
+  } catch (error: any) {
+    res.status(400).json({ error: error.message });
+  }
+});
+
+// --- Incoming (D3): criar/editar tarefa a partir de mensagem do chat ---
+// Assinatura HMAC-SHA256 sobre `${timestamp}.${rawBody}` (anti-replay: ±300s).
+const checkIncomingLimit = makeRateLimiter(20, 60_000);
+
+app.post('/api/webhooks/incoming', async (req, res) => {
+  try {
+    const ip = req.ip || 'unknown';
+    if (!checkIncomingLimit(`incoming:${ip}`)) {
+      return res.status(429).json({ error: 'Muitas requisições. Tente novamente em 1 minuto.' });
+    }
+    const secret = process.env.WEBHOOK_INCOMING_SECRET;
+    if (!secret) return res.status(503).json({ error: 'WEBHOOK_INCOMING_SECRET não configurado' });
+
+    const tsHeader = String(req.headers['x-brolabs-timestamp'] || '');
+    const sigHeader = req.headers['x-brolabs-signature'] as string | undefined;
+    const raw = (req as any).rawBody as Buffer | undefined;
+    if (!raw) return res.status(400).json({ error: 'Corpo bruto ausente (envie application/json)' });
+
+    const ver = verifyIncomingSignature(secret, tsHeader, raw, sigHeader);
+    if (!ver.ok) return res.status(401).json({ error: `Assinatura rejeitada: ${ver.reason}` });
+
+    const body = (req.body || {}) as Record<string, any>;
+    const action = body.action || (body.text ? 'create' : undefined);
+
+    if (action === 'create') {
+      const boardId = String(body.boardId || '');
+      if (!boardId) return res.status(400).json({ error: 'boardId é obrigatório' });
+      const boardRes = await query('SELECT * FROM boards WHERE id = $1', [boardId]);
+      if (!boardRes.rows.length) return res.status(400).json({ error: 'Board não encontrado' });
+      const board = mapDbBoard(boardRes.rows[0]);
+
+      let title = '';
+      let description = '';
+      if (body.task && body.task.title) {
+        title = String(body.task.title).trim();
+        description = String(body.task.description || '');
+      } else if (body.text) {
+        const t = String(body.text)
+          .trim()
+          .replace(/^(criar|create|nova tarefa|nova|task|tarefa)\s+/i, '');
+        const parts = t.split(/\s+\u2014\s+|\s+--\s+|\s+::\s+/);
+        title = (parts[0] || '').trim();
+        description = parts.slice(1).join(' \u2014 ').trim();
+      }
+      if (!title) return res.status(400).json({ error: 'Título ausente (informe task.title ou text)' });
+      if (title.length > 500) title = title.slice(0, 500);
+
+      const cols: any[] = board.columns || [];
+      const statusId = String(body.task?.statusId || cols[0]?.id || 'col-backlog');
+      const issueType = String(body.task?.issueType || 'task').slice(0, 50);
+      const priority = String(body.task?.priority || 'medium').slice(0, 50);
+
+      let assigneeIds: string[] = [];
+      if (Array.isArray(body.task?.assigneeIds) && body.task.assigneeIds.length) {
+        const ids = body.task.assigneeIds.map(String).slice(0, 100);
+        const v = await query('SELECT id FROM members WHERE id = ANY($1)', [ids]);
+        assigneeIds = v.rows.map((r: any) => r.id);
+      }
+
+      const countRes = await query('SELECT COUNT(*)::int AS n FROM tasks WHERE board_id = $1', [boardId]);
+      const prefix = String(board.key || 'TSK').slice(0, 20);
+      let key = '';
+      for (let n = (countRes.rows[0]?.n || 0) + 1; n < 100000; n++) {
+        const cand = `${prefix}-${n}`;
+        const ex = await query('SELECT 1 FROM tasks WHERE board_id = $1 AND key = $2', [boardId, cand]);
+        if (!ex.rowCount) {
+          key = cand;
+          break;
+        }
+      }
+      if (!key) key = `${prefix}-${Date.now()}`;
+
+      const taskId = `task-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+      const nowIso = new Date().toISOString();
+      const dueDate = body.task?.dueDate ? String(body.task.dueDate).slice(0, 50) : '';
+      await query(
+        `INSERT INTO tasks (
+          id, key, board_id, title, description, issue_type, priority, status_id,
+          assignee_id, reporter_id, epic_id, estimated_hours, logged_hours, story_points,
+          due_date, created_at, updated_at, subtasks, worklogs, comments, tags, dependencies,
+          assignee_ids, parent_id
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+        [
+          taskId,
+          key,
+          boardId,
+          title,
+          description,
+          issueType,
+          priority,
+          statusId,
+          assigneeIds[0] || '',
+          '',
+          body.task?.epicId || null,
+          Number(body.task?.estimatedHours) || 0,
+          0,
+          Number(body.task?.storyPoints) || 0,
+          dueDate,
+          nowIso,
+          nowIso,
+          '[]',
+          '[]',
+          '[]',
+          '[]',
+          '[]',
+          JSON.stringify(assigneeIds),
+          body.task?.parentId || null,
+        ]
+      );
+
+      const task = {
+        id: taskId,
+        key,
+        boardId,
+        title,
+        description,
+        issueType,
+        priority,
+        statusId,
+        assigneeIds,
+        dueDate,
+      };
+      if (assigneeIds.length) await handleTaskCreatedEvents(task);
+      logger.info('incoming task created', { taskId, key, boardId });
+      res.status(201).json({ success: true, task });
+      return;
+    }
+
+    if (action === 'update') {
+      const ref = String(body.taskId || body.taskKey || '');
+      if (!ref) return res.status(400).json({ error: 'taskId ou taskKey é obrigatório' });
+      const taskRes = await query('SELECT * FROM tasks WHERE id = $1 OR key = $2', [ref, ref]);
+      if (!taskRes.rows.length) return res.status(404).json({ error: 'Tarefa não encontrada' });
+      const current = mapDbTask(taskRes.rows[0]);
+      const t = body.task || {};
+
+      const fields: string[] = [];
+      const params: any[] = [];
+      const set = (col: string, val: any) => {
+        params.push(val);
+        fields.push(`${col} = $${params.length}`);
+      };
+
+      if (t.title != null) {
+        const v = String(t.title).trim();
+        if (!v || v.length > 500) return res.status(400).json({ error: 'Título inválido' });
+        set('title', v);
+      }
+      if (t.description != null) set('description', String(t.description).slice(0, 20000));
+      if (t.statusId) {
+        const boardRes = await query('SELECT columns FROM boards WHERE id = $1', [current.boardId]);
+        const cols = safeJson(boardRes.rows[0]?.columns, []);
+        if (!cols.some((c: any) => c.id === String(t.statusId))) {
+          return res.status(400).json({ error: 'statusId inválido para este board' });
+        }
+        set('status_id', String(t.statusId));
+      }
+      if (!fields.length) {
+        return res.status(400).json({ error: 'Nada para atualizar (task.title/description/statusId)' });
+      }
+      set('updated_at', new Date().toISOString());
+      params.push(current.id);
+      await query(`UPDATE tasks SET ${fields.join(', ')} WHERE id = $${params.length}`, params);
+
+      const after = await query('SELECT * FROM tasks WHERE id = $1', [current.id]);
+      const merged = mapDbTask(after.rows[0]);
+      if (t.statusId && merged.statusId !== current.statusId) {
+        void fireTaskUpdateEvents(current, merged, { statusId: merged.statusId });
+      }
+      logger.info('incoming task updated', { taskId: current.id, fields: fields.length });
+      res.json({ success: true, task: merged });
+      return;
+    }
+
+    res.status(400).json({ error: 'Ação não reconhecida. Use action: "create" ou "update".' });
+  } catch (error: any) {
+    console.error('incoming webhook failed:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1995,7 +2541,8 @@ app.get('/api/cron/process-emails', async (req, res) => {
       return res.status(401).json({ error: 'Token inválido' });
     }
     const result = await processOutbox(50);
-    res.json({ success: true, ...result });
+    const webhooks = await processWebhookOutbox(50);
+    res.json({ success: true, ...result, webhooks });
   } catch (error: any) {
     console.error('Process emails cron failed:', error);
     res.status(500).json({ error: error.message });
