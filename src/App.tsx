@@ -29,6 +29,7 @@ import { PrivateRoute } from './components/PrivateRoute';
 import { MyTodoView } from './components/MyTodoView';
 import { NotesView } from './components/NotesView';
 import { PublicBoardView } from './components/PublicBoardView';
+import { PublicTaskView } from './components/PublicTaskView';
 import { deriveAppStatus } from './utils/initialDataFlow';
 import { Loader2, TriangleAlert, Inbox, RefreshCw } from 'lucide-react';
 
@@ -184,6 +185,8 @@ export default function App() {
           <Route path="/register" element={<RegisterPage />} />
           {/* Quadro público (item 1.2) — sem autenticação, fora do PrivateRoute */}
           <Route path="/q/:token" element={<PublicBoardView />} />
+          {/* Tarefa pública com comentários (item 3) — sem autenticação */}
+          <Route path="/t/:token" element={<PublicTaskView />} />
           <Route
             element={
               <PrivateRoute>

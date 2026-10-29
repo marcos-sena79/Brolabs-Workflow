@@ -145,9 +145,23 @@ async function runOpenRouterOnce(prompt: string): Promise<string> {
     const text: string | undefined = data?.choices?.[0]?.message?.content;
     if (!text || !text.trim()) throw new AiFailedError('Resposta vazia do modelo!');
     return text;
+  } catch (err: any) {
+    if (isAbortError(err)) {
+      throw new AiFailedError(
+        `Timeout: o provedor não respondeu em ${Math.round(TIMEOUT_MS / 1000)}s`
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** Detecta abort/timeout do cliente (fetch abortado ou SDK cancelado). */
+export function isAbortError(err: any): boolean {
+  const name = String(err?.name || '');
+  const msg = String(err?.message || err || '');
+  return name === 'AbortError' || /abort|timed out|timeout/i.test(msg);
 }
 
 /** Chama o provedor ativo com timeout de 59s e 1 retry (com espera de 1,5s) em 5xx/429. Lança AiFailedError. */
@@ -164,6 +178,10 @@ export async function runAi(prompt: string): Promise<string> {
     return await attempt();
   } catch (err: any) {
     const msg = String(err?.message || err);
+    // Timeout não é retentável: repetir dobra a latência percebida pelo usuário.
+    if (isAbortError(err)) {
+      throw new AiFailedError(msg);
+    }
     const retryable =
       err instanceof AiFailedError ||
       /\b(5\d{2}|429)\b/.test(msg) ||
@@ -176,4 +194,55 @@ export async function runAi(prompt: string): Promise<string> {
       throw new AiFailedError(String(err2?.message || err2));
     }
   }
+}
+
+export interface AiErrorResponse {
+  status: number;
+  body: {
+    error: string;
+    unavailable?: boolean;
+    retryAfterMinutes?: number;
+    providerStatus?: number;
+  };
+}
+
+/**
+ * Traduz falha da IA em resposta HTTP legível para o usuário.
+ *
+ * - IA não configurada → 503 (unavailable).
+ * - Limite do provedor (429 / rate limit / quota) → 429 com hint de nova tentativa.
+ * - Timeout do provedor → 504 (gateway timeout).
+ * - Qualquer outra falha (inclusive erro legítimo do provedor) → 502 com o
+ *   detalhe original, para o usuário saber o que houve.
+ */
+export function mapAiError(error: unknown): AiErrorResponse {
+  const message = String((error as any)?.message || error || 'Falha na IA');
+
+  if (error instanceof AiUnavailableError) {
+    return {
+      status: 503,
+      body: { error: 'IA não configurada no servidor', unavailable: true },
+    };
+  }
+
+  const provider429 = message.match(/\b429\b/) || /rate.?limit|too many requests|quota/i.test(message);
+  if (provider429) {
+    return {
+      status: 429,
+      body: {
+        error: `O provedor de IA recusou a requisição por limite de uso. Tente novamente em alguns minutos. Detalhe: ${message}`,
+        retryAfterMinutes: 5,
+        providerStatus: 429,
+      },
+    };
+  }
+
+  if (isAbortError(error) || /timeout|tempo limite|não respondeu/i.test(message)) {
+    return {
+      status: 504,
+      body: { error: `Tempo limite do provedor de IA excedido. Detalhe: ${message}` },
+    };
+  }
+
+  return { status: 502, body: { error: message } };
 }

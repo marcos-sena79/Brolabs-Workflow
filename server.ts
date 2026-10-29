@@ -85,6 +85,7 @@ import {
   aiModel,
   checkAiRateLimit,
   logAiUsage,
+  mapAiError,
   runAi,
   AiUnavailableError,
   AiFailedError,
@@ -97,6 +98,13 @@ import {
 } from './src/server/webhooks/dispatcher';
 import { logger } from './src/server/logger';
 import { migrationsSummary } from './src/server/migrate';
+import { publicTaskRouter } from './src/server/publicTaskRoutes';
+import { githubRouter } from './src/server/githubRoutes';
+import {
+  buildSummaryContext,
+  computeWorklogStats,
+  isEmptySource,
+} from './src/server/taskSummary';
 
 dotenv.config();
 
@@ -1173,10 +1181,125 @@ ${context.slice(0, 20000)}
       },
     });
   } catch (error: any) {
-    const status = error instanceof AiUnavailableError ? 503 : 502;
-    await logAiUsage(memberId, 'task_analyze', inputChars, 0, 'error').catch(() => {});
+    const mapped = mapAiError(error);
+    await logAiUsage(
+      memberId,
+      'task_analyze',
+      inputChars,
+      0,
+      mapped.status === 429 ? 'rate_limited' : 'error'
+    ).catch(() => {});
     console.error('Task analyze failed:', error);
-    res.status(status).json({ error: error.message || 'Falha na IA' });
+    res.status(mapped.status).json(mapped.body);
+  }
+});
+
+// --- Item 8 (S3): Resumo de comentários/worklogs com IA ---
+app.post('/api/tasks/:id/summary', authenticateToken, async (req, res) => {
+  const memberId = req.memberId!;
+  let inputChars = 0;
+  try {
+    const taskRes = await query('SELECT * FROM tasks WHERE id = $1', [req.params.id]);
+    if (!taskRes.rows.length) return res.status(404).json({ error: 'Tarefa não encontrada' });
+    const task = mapDbTask(taskRes.rows[0]);
+
+    const eff = await resolvePermissions(memberId, task.boardId);
+    if (!eff || !eff.canEditTask) {
+      return res.status(403).json({ error: 'Sem permissão para resumir esta tarefa' });
+    }
+
+    const memRes = await query('SELECT id, name FROM members');
+    const nameOf = (id: string) => memRes.rows.find((m: any) => m.id === id)?.name || id || '(sem autor)';
+
+    // Comentários internos + comentários públicos de visitante (item 3)
+    const internalComments = (task.comments || []).map((c: any) => ({
+      authorName: nameOf(c.authorId),
+      text: String(c.text || ''),
+      createdAt: c.createdAt,
+    }));
+
+    let visitorComments: { authorName: string; text: string; createdAt: string }[] = [];
+    try {
+      const vRes = await query(
+        `SELECT visitor_name, body, created_at FROM task_public_comments
+         WHERE task_id = $1 AND removed_at IS NULL ORDER BY created_at ASC`,
+        [task.id]
+      );
+      visitorComments = vRes.rows.map((c: any) => ({
+        authorName: `Visitante: ${c.visitor_name}`,
+        text: String(c.body || ''),
+        createdAt: c.created_at,
+      }));
+    } catch {
+      // tabela de comentários públicos ainda não migrada — segue só com os internos
+    }
+
+    const worklogs = (task.worklogs || []).map((w: any) => ({
+      memberName: nameOf(w.memberId),
+      hours: Number(w.hours) || 0,
+      date: w.date || '',
+      comment: w.comment || '',
+    }));
+
+    const source = { comments: [...internalComments, ...visitorComments], worklogs };
+    const stats = computeWorklogStats(worklogs);
+
+    if (isEmptySource(source)) {
+      return res.status(200).json({
+        content: '',
+        empty: true,
+        message: 'Não há comentários ou apontamentos de tempo para resumir.',
+        stats,
+      });
+    }
+
+    if (!aiConfigured()) {
+      await logAiUsage(memberId, 'task_summary', 0, 0, 'error');
+      return res.status(503).json({ error: 'IA não configurada', unavailable: true });
+    }
+
+    const retryAfter = await checkAiRateLimit(memberId);
+    if (retryAfter) {
+      await logAiUsage(memberId, 'task_summary', 0, 0, 'rate_limited');
+      const minutes = Math.max(1, Math.ceil((retryAfter.getTime() - Date.now()) / 60000));
+      return res
+        .status(429)
+        .json({ error: `Limite de 20 usos/h atingido. Tente em ${minutes} min`, retryAfterMinutes: minutes });
+    }
+
+    const built = buildSummaryContext(source);
+    inputChars = built.context.length;
+    const prompt = `Resuma a discussão e o tempo gasto da tarefa abaixo (pt-BR, markdown limpo, sem preâmbulo).
+(1) DECISÕES: decisões tomadas, com autor quando identificável.
+(2) PENDÊNCIAS: pontos em aberto, bloqueios e próximos passos.
+(3) TEMPO: horas por pessoa e total (use exatamente os números do contexto).
+Não invente informações que não estejam no contexto. Se houver truncamento ({TRUNCADO}), avise que o resumo é parcial.
+
+<<<CONTEXTO>>>
+${built.context.slice(0, 20000)}
+<<<END>>>`;
+
+    const output = await runAi(prompt);
+    await logAiUsage(memberId, 'task_summary', inputChars, output.length, 'ok');
+    res.json({
+      content: output,
+      truncated: built.truncated,
+      stats: built.stats,
+      usage: {
+        action: 'task_summary',
+        inputChars,
+        outputChars: output.length,
+        provider: aiProvider(),
+        model: aiModel(),
+      },
+    });
+  } catch (error: any) {
+    const mapped = mapAiError(error);
+    await logAiUsage(memberId, 'task_summary', inputChars, 0, mapped.status === 429 ? 'rate_limited' : 'error').catch(
+      () => {}
+    );
+    console.error('Task summary failed:', error);
+    res.status(mapped.status).json(mapped.body);
   }
 });
 
@@ -1622,6 +1745,12 @@ app.get('/api/public/boards/:token', async (req, res) => {
     res.status(500).json({ error: 'Erro ao carregar quadro público' });
   }
 });
+
+// --- TAREFA PÚBLICA COM COMENTÁRIOS (item 3 da Onda 2) --- //
+app.use('/api', publicTaskRouter);
+
+// --- GITHUB: commits atrelados à tarefa (item 4 da Onda 2, D4) --- //
+app.use('/api', githubRouter);
 
 // --- BOARD COLUMNS (item 1.1, lock otimista via boards.version) --- //
 
@@ -3400,10 +3529,12 @@ app.post('/api/notes/:id/ai', authenticateToken, validateBody(noteAiSchema), asy
       usage: { action, inputChars, outputChars: output.length, provider: aiProvider(), model: aiModel() },
     });
   } catch (error: any) {
-    const status = error instanceof AiUnavailableError ? 503 : 502;
-    await logAiUsage(memberId, action, inputChars, 0, 'error').catch(() => {});
+    const mapped = mapAiError(error);
+    await logAiUsage(memberId, action, inputChars, 0, mapped.status === 429 ? 'rate_limited' : 'error').catch(
+      () => {}
+    );
     console.error('Note AI action failed:', error);
-    res.status(status).json({ error: error.message || 'Falha na IA' });
+    res.status(mapped.status).json(mapped.body);
   }
 });
 

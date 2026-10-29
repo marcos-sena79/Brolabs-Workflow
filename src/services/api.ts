@@ -20,6 +20,11 @@ import {
   NoteAiAction,
   BoardShareInfo,
   PublicBoardData,
+  TaskPublicLink,
+  VisitorComment,
+  PublicTaskData,
+  TaskCommit,
+  GithubRepoSetting,
   TagDef,
 } from '../types';
 
@@ -202,6 +207,88 @@ export const api = {
   async getPublicBoard(token: string): Promise<PublicBoardData> {
     const res = await fetch(`/api/public/boards/${encodeURIComponent(token)}`);
     if (!res.ok) throw new Error('NOT_FOUND');
+    return res.json();
+  },
+
+  // Tarefa pública com comentários (item 3 da Onda 2)
+  async getTaskPublicLink(taskId: string): Promise<TaskPublicLink> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/public-link`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao carregar o link público da tarefa');
+    return res.json();
+  },
+
+  async createTaskPublicLink(
+    taskId: string,
+    expiresInDays?: number
+  ): Promise<TaskPublicLink & { url: string }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/public-link`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(expiresInDays ? { expiresInDays } : {}),
+    });
+    if (!res.ok)
+      throw new Error((await res.json().catch(() => ({})))?.error || 'Falha ao gerar link público da tarefa');
+    return res.json();
+  },
+
+  async revokeTaskPublicLink(taskId: string): Promise<{ success: boolean }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/public-link`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao revogar link público da tarefa');
+    return res.json();
+  },
+
+  async setTaskPublicLinkComments(
+    taskId: string,
+    allowComments: boolean
+  ): Promise<{ allowComments: boolean }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/public-link`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ allowComments }),
+    });
+    if (!res.ok) throw new Error('Falha ao alterar permissões do link público');
+    return res.json();
+  },
+
+  async getTaskPublicComments(taskId: string): Promise<{ comments: VisitorComment[] }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/public-comments`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao carregar comentários públicos');
+    return res.json();
+  },
+
+  async removeTaskPublicComment(taskId: string, commentId: string): Promise<{ success: boolean }> {
+    const res = await fetch(
+      `/api/tasks/${encodeURIComponent(taskId)}/public-comments/${encodeURIComponent(commentId)}`,
+      { method: 'DELETE', headers: getAuthHeaders() }
+    );
+    if (!res.ok) throw new Error('Falha ao remover comentário público');
+    return res.json();
+  },
+
+  async getPublicTask(token: string): Promise<PublicTaskData> {
+    const res = await fetch(`/api/public/tasks/${encodeURIComponent(token)}`);
+    if (!res.ok) throw new Error('NOT_FOUND');
+    return res.json();
+  },
+
+  async postPublicTaskComment(
+    token: string,
+    input: { name: string; body: string }
+  ): Promise<{ success: boolean; comment: { id: string } }> {
+    const res = await fetch(`/api/public/tasks/${encodeURIComponent(token)}/comments`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    if (!res.ok)
+      throw new Error((await res.json().catch(() => ({})))?.error || 'Não foi possível enviar o comentário');
     return res.json();
   },
 
@@ -774,6 +861,55 @@ export const api = {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data?.error || 'Falha na análise de IA');
     return data;
+  },
+
+  /** Item 8 (Onda 2): resumo de comentários/worklogs da tarefa. */
+  async runTaskSummary(id: string): Promise<{ content: string; empty?: boolean; message?: string }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/summary`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao resumir a tarefa');
+    return data;
+  },
+
+  // Commits do GitHub (item 4 da Onda 2)
+  async getTaskCommits(id: string): Promise<{ commits: TaskCommit[] }> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/commits`, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Falha ao carregar commits');
+    return res.json();
+  },
+
+  async getGithubSettings(): Promise<{ repositories: GithubRepoSetting[] }> {
+    const res = await fetch('/api/github/settings', { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error('Falha ao carregar a configuração do GitHub');
+    return res.json();
+  },
+
+  async saveGithubSetting(input: {
+    owner: string;
+    repo: string;
+    secret: string;
+  }): Promise<{ id: string; owner: string; repo: string }> {
+    const res = await fetch('/api/github/settings', {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(input),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || 'Falha ao salvar a configuração do GitHub');
+    return data;
+  },
+
+  async deleteGithubSetting(id: string): Promise<{ success: boolean }> {
+    const res = await fetch(`/api/github/settings/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) throw new Error('Falha ao remover a configuração do GitHub');
+    return res.json();
   },
 
   async testWebhook(id: string): Promise<{

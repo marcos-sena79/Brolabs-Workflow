@@ -348,6 +348,70 @@ export interface PublicBoardData {
   tasks: PublicTask[];
 }
 
+// --- Tarefa pública com comentários (item 3 da Onda 2) ---
+
+export interface TaskPublicLink {
+  active: boolean;
+  token: string | null;
+  url: string | null;
+  expiresAt: string | null;
+  allowComments: boolean;
+  createdAt?: string | null;
+}
+
+export interface VisitorComment {
+  id: string;
+  authorName: string;
+  text: string;
+  createdAt: string;
+  removed?: boolean;
+}
+
+export interface PublicTaskDetail {
+  id: string;
+  key: string;
+  title: string;
+  description: string;
+  priority: string;
+  issueType: string;
+  dueDate: string;
+  storyPoints: number;
+  tags: string[];
+  statusTitle: string;
+  subtasks: { title: string; completed: boolean }[];
+  assigneeNames: string[];
+}
+
+export interface PublicTaskData {
+  task: PublicTaskDetail;
+  allowComments: boolean;
+  expiresAt: string | null;
+  comments: { id: string; visitorName: string; body: string; createdAt: string }[];
+}
+
+// --- Commits do GitHub atrelados à tarefa (item 4 da Onda 2) ---
+
+export interface TaskCommit {
+  id: string;
+  sha: string;
+  message: string;
+  author: string | null;
+  authorAvatar: string | null;
+  url: string | null;
+  branch: string | null;
+  repo: string | null;
+  committedAt: string | null;
+  createdAt: string;
+}
+
+export interface GithubRepoSetting {
+  id: string;
+  owner: string;
+  repo: string;
+  enabled: boolean;
+  hasSecret: boolean;
+}
+
 // --- Etiquetas globais (item 2.2) ---
 
 export interface TagDef {

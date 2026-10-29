@@ -1,9 +1,9 @@
 // server.ts
-import express from "express";
+import express2 from "express";
 import path2 from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 import fs2 from "fs";
-import crypto3 from "crypto";
+import crypto4 from "crypto";
 import dotenv2 from "dotenv";
 import cookieParser from "cookie-parser";
 
@@ -1769,9 +1769,21 @@ async function runOpenRouterOnce(prompt) {
     const text = data?.choices?.[0]?.message?.content;
     if (!text || !text.trim()) throw new AiFailedError("Resposta vazia do modelo!");
     return text;
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new AiFailedError(
+        `Timeout: o provedor n\xE3o respondeu em ${Math.round(TIMEOUT_MS / 1e3)}s`
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
+}
+function isAbortError(err) {
+  const name = String(err?.name || "");
+  const msg = String(err?.message || err || "");
+  return name === "AbortError" || /abort|timed out|timeout/i.test(msg);
 }
 async function runAi(prompt) {
   const provider = aiProvider();
@@ -1783,6 +1795,9 @@ async function runAi(prompt) {
     return await attempt();
   } catch (err) {
     const msg = String(err?.message || err);
+    if (isAbortError(err)) {
+      throw new AiFailedError(msg);
+    }
     const retryable = err instanceof AiFailedError || /\b(5\d{2}|429)\b/.test(msg) || /overloaded|unavailable|quota/i.test(msg);
     if (!retryable) throw new AiFailedError(msg);
     try {
@@ -1792,6 +1807,33 @@ async function runAi(prompt) {
       throw new AiFailedError(String(err2?.message || err2));
     }
   }
+}
+function mapAiError(error) {
+  const message = String(error?.message || error || "Falha na IA");
+  if (error instanceof AiUnavailableError) {
+    return {
+      status: 503,
+      body: { error: "IA n\xE3o configurada no servidor", unavailable: true }
+    };
+  }
+  const provider429 = message.match(/\b429\b/) || /rate.?limit|too many requests|quota/i.test(message);
+  if (provider429) {
+    return {
+      status: 429,
+      body: {
+        error: `O provedor de IA recusou a requisi\xE7\xE3o por limite de uso. Tente novamente em alguns minutos. Detalhe: ${message}`,
+        retryAfterMinutes: 5,
+        providerStatus: 429
+      }
+    };
+  }
+  if (isAbortError(error) || /timeout|tempo limite|não respondeu/i.test(message)) {
+    return {
+      status: 504,
+      body: { error: `Tempo limite do provedor de IA excedido. Detalhe: ${message}` }
+    };
+  }
+  return { status: 502, body: { error: message } };
 }
 
 // src/server/webhooks/dispatcher.ts
@@ -2248,15 +2290,499 @@ if (invokedPath === fileURLToPath(import.meta.url)) {
   main();
 }
 
+// src/server/publicTaskRoutes.ts
+import express from "express";
+import crypto3 from "crypto";
+
+// src/server/publicTasks.ts
+var PUBLIC_LINK_DEFAULT_DAYS = 90;
+var PUBLIC_LINK_MAX_DAYS = 365;
+var VISITOR_NAME_MAX = 60;
+var VISITOR_BODY_MAX = 2e3;
+var VISITOR_COMMENT_LIMIT = 5;
+var VISITOR_COMMENT_WINDOW_MINUTES = 10;
+var PUBLIC_TOKEN_PATTERN = /^[a-f0-9]{64}$/;
+var EMAIL_PATTERN = /[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/gi;
+var AMP = String.fromCharCode(38);
+var LT = String.fromCharCode(60);
+var GT = String.fromCharCode(62);
+var ENTITY_AMP = AMP + "amp;";
+var ENTITY_LT = AMP + "lt;";
+var ENTITY_GT = AMP + "gt;";
+function stripHtml(raw) {
+  if (typeof raw !== "string") return "";
+  return raw.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]*>/g, " ").replace(/&nbsp;/gi, " ").split(AMP).join(ENTITY_AMP).split(LT).join(ENTITY_LT).split(GT).join(ENTITY_GT).replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+}
+function redactEmails(raw) {
+  if (typeof raw !== "string") return "";
+  return raw.replace(EMAIL_PATTERN, "[e-mail oculto]");
+}
+function sanitizeVisitorName(raw) {
+  const cleaned = stripHtml(raw).replace(/\s+/g, " ").slice(0, VISITOR_NAME_MAX).trim();
+  return cleaned || "Visitante";
+}
+function sanitizeVisitorBody(raw) {
+  if (typeof raw !== "string") return "";
+  const cleaned = stripHtml(raw).slice(0, VISITOR_BODY_MAX).trim();
+  return cleaned;
+}
+function isPublicLinkActive(link, now = /* @__PURE__ */ new Date()) {
+  if (!link || !link.token) return false;
+  if (!PUBLIC_TOKEN_PATTERN.test(link.token)) return false;
+  if (link.revoked_at) return false;
+  if (link.expires_at && new Date(link.expires_at).getTime() <= now.getTime()) return false;
+  return true;
+}
+function resolveExpiryDays(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return PUBLIC_LINK_DEFAULT_DAYS;
+  return Math.min(PUBLIC_LINK_MAX_DAYS, Math.floor(n));
+}
+function visitorCommentRateState(recentCount, limit = VISITOR_COMMENT_LIMIT, windowMinutes = VISITOR_COMMENT_WINDOW_MINUTES) {
+  if (recentCount < limit) return { allowed: true, retryAfterMinutes: 0 };
+  return { allowed: false, retryAfterMinutes: windowMinutes };
+}
+function buildPublicTaskPayload(input) {
+  return {
+    id: input.id,
+    key: input.key,
+    title: stripHtml(input.title).slice(0, 300),
+    description: redactEmails(stripHtml(input.description)).slice(0, 5e3),
+    priority: input.priority || "medium",
+    issueType: input.issueType || "task",
+    dueDate: input.dueDate || "",
+    storyPoints: Number(input.storyPoints) || 0,
+    tags: Array.isArray(input.tags) ? input.tags.map((t) => String(t).slice(0, 40)) : [],
+    statusTitle: stripHtml(input.statusTitle || "").slice(0, 80),
+    subtasks: Array.isArray(input.subtasks) ? input.subtasks.map((s) => ({
+      title: stripHtml(s?.title ?? "").slice(0, 200),
+      completed: Boolean(s?.completed)
+    })) : [],
+    assigneeNames: Array.isArray(input.assigneeNames) ? input.assigneeNames.map((n) => stripHtml(n).slice(0, 80)).filter(Boolean) : []
+  };
+}
+
+// src/server/publicTaskRoutes.ts
+var publicTaskRouter = express.Router();
+function safeJson2(val, fallback = []) {
+  if (val === null || val === void 0) return fallback;
+  if (typeof val === "object") return val;
+  try {
+    return JSON.parse(val);
+  } catch {
+    return fallback;
+  }
+}
+function escHtml(s) {
+  const AMP2 = String.fromCharCode(38);
+  const LT2 = String.fromCharCode(60);
+  const GT2 = String.fromCharCode(62);
+  const QUOT = String.fromCharCode(34);
+  const APOS = String.fromCharCode(39);
+  return String(s || "").split(AMP2).join(AMP2 + "amp;").split(LT2).join(AMP2 + "lt;").split(GT2).join(AMP2 + "gt;").split(QUOT).join(AMP2 + "quot;").split(APOS).join(AMP2 + "#39;");
+}
+var publicBuckets = /* @__PURE__ */ new Map();
+function rateLimit(key, max, windowMs) {
+  const now = Date.now();
+  const bucket = publicBuckets.get(key);
+  if (!bucket || bucket.resetAt <= now) {
+    publicBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    if (publicBuckets.size > 5e3) {
+      for (const [k, v] of publicBuckets) if (v.resetAt <= now) publicBuckets.delete(k);
+    }
+    return true;
+  }
+  bucket.count += 1;
+  return bucket.count <= max;
+}
+function hashIp(ip) {
+  const salt = process.env.PUBLIC_LINK_SALT || process.env.JWT_SECRET || "brolabs-public";
+  return crypto3.createHash("sha256").update(`${salt}:${ip}`).digest("hex");
+}
+function clientIp(req) {
+  return String(req.ip || req.socket?.remoteAddress || "unknown");
+}
+function publicUrlBase(req) {
+  return (process.env.APP_URL || `${req.protocol}://${req.get("host")}`).replace(/\/+$/, "");
+}
+async function loadTaskForMember(memberId, taskId, flag) {
+  const r = await query("SELECT * FROM tasks WHERE id = $1", [taskId]);
+  if (!r.rows.length) {
+    return { ok: false, status: 404, message: "Tarefa n\xE3o encontrada" };
+  }
+  const task = r.rows[0];
+  const eff = await resolvePermissions(memberId, task.board_id);
+  if (!eff) {
+    return { ok: false, status: 403, message: "Sem acesso a esta tarefa" };
+  }
+  if (!eff[flag]) {
+    return { ok: false, status: 403, message: "Sem permiss\xE3o para esta a\xE7\xE3o" };
+  }
+  return { ok: true, task, eff };
+}
+async function assigneeNamesOf(task) {
+  const ids = [];
+  try {
+    const parsed = safeJson2(task.assignee_ids, []);
+    if (Array.isArray(parsed)) ids.push(...parsed.filter((x) => typeof x === "string" && x));
+  } catch {
+  }
+  if (task.assignee_id) ids.push(task.assignee_id);
+  const unique = [...new Set(ids)];
+  if (!unique.length) return [];
+  const mRes = await query("SELECT id, name FROM members WHERE id = ANY($1)", [unique]);
+  return mRes.rows.map((m) => String(m.name)).filter(Boolean);
+}
+publicTaskRouter.get("/tasks/:id/public-link", authenticateToken, async (req, res) => {
+  try {
+    const loaded = await loadTaskForMember(req.memberId, req.params.id, "canManageBoard");
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.message });
+    const r = await query(
+      `SELECT id, token, allow_comments, expires_at, revoked_at, created_at
+       FROM task_public_links WHERE task_id = $1 AND revoked_at IS NULL
+       ORDER BY created_at DESC LIMIT 1`,
+      [req.params.id]
+    );
+    const link = r.rows[0];
+    const active = isPublicLinkActive(link);
+    res.json({
+      active,
+      token: active ? link.token : null,
+      url: active ? `${publicUrlBase(req)}/t/${link.token}` : null,
+      expiresAt: active ? link.expires_at : null,
+      allowComments: active ? Boolean(link.allow_comments) : false,
+      createdAt: link?.created_at || null
+    });
+  } catch (error) {
+    console.error("GET public-link failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+publicTaskRouter.post("/tasks/:id/public-link", authenticateToken, async (req, res) => {
+  try {
+    const loaded = await loadTaskForMember(req.memberId, req.params.id, "canManageBoard");
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.message });
+    const days = resolveExpiryDays(req.body?.expiresInDays ?? PUBLIC_LINK_DEFAULT_DAYS);
+    const token = crypto3.randomBytes(32).toString("hex");
+    const linkId = `tpl-${Date.now()}-${crypto3.randomBytes(4).toString("hex")}`;
+    await query(
+      "UPDATE task_public_links SET revoked_at = NOW() WHERE task_id = $1 AND revoked_at IS NULL",
+      [req.params.id]
+    );
+    const r = await query(
+      `INSERT INTO task_public_links (id, task_id, token, allow_comments, expires_at, created_by)
+       VALUES ($1, $2, $3, TRUE, NOW() + make_interval(days => $4::int), $5)
+       RETURNING token, expires_at`,
+      [linkId, req.params.id, token, days, req.memberId]
+    );
+    res.status(201).json({
+      token: r.rows[0].token,
+      url: `${publicUrlBase(req)}/t/${r.rows[0].token}`,
+      expiresAt: r.rows[0].expires_at,
+      allowComments: true
+    });
+  } catch (error) {
+    console.error("POST public-link failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+publicTaskRouter.delete("/tasks/:id/public-link", authenticateToken, async (req, res) => {
+  try {
+    const loaded = await loadTaskForMember(req.memberId, req.params.id, "canManageBoard");
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.message });
+    await query(
+      "UPDATE task_public_links SET revoked_at = NOW() WHERE task_id = $1 AND revoked_at IS NULL",
+      [req.params.id]
+    );
+    res.json({ success: true, active: false });
+  } catch (error) {
+    console.error("DELETE public-link failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+publicTaskRouter.patch("/tasks/:id/public-link", authenticateToken, async (req, res) => {
+  try {
+    const loaded = await loadTaskForMember(req.memberId, req.params.id, "canManageBoard");
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.message });
+    const allow = Boolean(req.body?.allowComments);
+    const r = await query(
+      `UPDATE task_public_links SET allow_comments = $1
+       WHERE task_id = $2 AND revoked_at IS NULL
+       RETURNING allow_comments`,
+      [allow, req.params.id]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: "Nenhum link p\xFAblico ativo para esta tarefa" });
+    res.json({ allowComments: Boolean(r.rows[0].allow_comments) });
+  } catch (error) {
+    console.error("PATCH public-link failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+publicTaskRouter.get("/tasks/:id/public-comments", authenticateToken, async (req, res) => {
+  try {
+    const loaded = await loadTaskForMember(req.memberId, req.params.id, "canAddComment");
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.message });
+    const r = await query(
+      `SELECT id, visitor_name, body, created_at, removed_at
+       FROM task_public_comments WHERE task_id = $1 ORDER BY created_at ASC`,
+      [req.params.id]
+    );
+    res.json({
+      comments: r.rows.map((c) => ({
+        id: c.id,
+        authorName: `Visitante: ${c.visitor_name}`,
+        text: c.body,
+        createdAt: c.created_at,
+        removed: Boolean(c.removed_at)
+      }))
+    });
+  } catch (error) {
+    console.error("GET public-comments failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+publicTaskRouter.delete("/tasks/:id/public-comments/:commentId", authenticateToken, async (req, res) => {
+  try {
+    const loaded = await loadTaskForMember(req.memberId, req.params.id, "canManageBoard");
+    if (!loaded.ok) return res.status(loaded.status).json({ error: loaded.message });
+    const r = await query(
+      `UPDATE task_public_comments SET removed_at = NOW(), removed_by = $1
+       WHERE id = $2 AND task_id = $3 AND removed_at IS NULL`,
+      [req.memberId, req.params.commentId, req.params.id]
+    );
+    if (!r.rowCount) return res.status(404).json({ error: "Coment\xE1rio n\xE3o encontrado" });
+    res.json({ success: true });
+  } catch (error) {
+    console.error("DELETE public-comment failed:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+var genericNotFound = (res) => res.status(404).json({ error: "Link inv\xE1lido ou desativado" });
+publicTaskRouter.get("/public/tasks/:token", async (req, res) => {
+  try {
+    const ip = clientIp(req);
+    if (!rateLimit(`read:${ip}`, 60, 6e4)) {
+      return res.status(429).json({ error: "Muitas requisi\xE7\xF5es. Tente novamente em 1 minuto." });
+    }
+    const { token } = req.params;
+    if (!PUBLIC_TOKEN_PATTERN.test(token)) return genericNotFound(res);
+    const linkRes = await query(
+      `SELECT id, task_id, token, allow_comments, expires_at, revoked_at
+       FROM task_public_links WHERE token = $1`,
+      [token]
+    );
+    const link = linkRes.rows[0];
+    if (!isPublicLinkActive(link)) return genericNotFound(res);
+    const taskRes = await query("SELECT * FROM tasks WHERE id = $1", [link.task_id]);
+    if (!taskRes.rows.length) return genericNotFound(res);
+    const task = taskRes.rows[0];
+    const boardRes = await query("SELECT columns FROM boards WHERE id = $1", [task.board_id]);
+    const cols = safeJson2(boardRes.rows[0]?.columns, []);
+    const statusTitle = (Array.isArray(cols) ? cols.find((c) => c.id === task.status_id)?.title : "") || task.status_id;
+    const names = await assigneeNamesOf(task);
+    const payload = buildPublicTaskPayload({
+      id: task.id,
+      key: task.key,
+      title: task.title,
+      description: task.description,
+      priority: task.priority,
+      issueType: task.issue_type,
+      dueDate: task.due_date,
+      storyPoints: task.story_points,
+      tags: safeJson2(task.tags, []),
+      subtasks: safeJson2(task.subtasks, []),
+      assigneeNames: names,
+      statusTitle
+    });
+    const cRes = await query(
+      `SELECT id, visitor_name, body, created_at FROM task_public_comments
+       WHERE link_id = $1 AND removed_at IS NULL ORDER BY created_at ASC`,
+      [link.id]
+    );
+    res.set("Cache-Control", "no-store");
+    res.set("X-Robots-Tag", "noindex");
+    res.json({
+      task: payload,
+      allowComments: Boolean(link.allow_comments),
+      expiresAt: link.expires_at,
+      comments: cRes.rows.map((c) => ({
+        id: c.id,
+        visitorName: c.visitor_name,
+        body: c.body,
+        createdAt: c.created_at
+      }))
+    });
+  } catch (error) {
+    console.error("Public task failed:", error);
+    res.status(500).json({ error: "Erro ao carregar tarefa p\xFAblica" });
+  }
+});
+publicTaskRouter.post("/public/tasks/:token/comments", async (req, res) => {
+  try {
+    const ip = clientIp(req);
+    const ipHash = hashIp(ip);
+    if (!rateLimit(`write:${ip}`, 10, 6e4)) {
+      return res.status(429).json({ error: "Muitas tentativas. Tente novamente em 1 minuto." });
+    }
+    const { token } = req.params;
+    if (!PUBLIC_TOKEN_PATTERN.test(token)) return genericNotFound(res);
+    const linkRes = await query(
+      `SELECT id, task_id, token, allow_comments, expires_at, revoked_at
+       FROM task_public_links WHERE token = $1`,
+      [token]
+    );
+    const link = linkRes.rows[0];
+    if (!isPublicLinkActive(link)) return genericNotFound(res);
+    if (!link.allow_comments) {
+      return res.status(403).json({ error: "Coment\xE1rios desativados para este link" });
+    }
+    const name = sanitizeVisitorName(req.body?.name);
+    const body = sanitizeVisitorBody(req.body?.body);
+    if (!body) {
+      return res.status(400).json({ error: "Escreva um coment\xE1rio antes de enviar" });
+    }
+    const recent = await query(
+      `SELECT COUNT(*)::int AS n FROM task_public_comments
+       WHERE ip_hash = $1 AND created_at > NOW() - make_interval(mins => $2::int)`,
+      [ipHash, VISITOR_COMMENT_WINDOW_MINUTES]
+    );
+    const rate = visitorCommentRateState(recent.rows[0]?.n ?? 0);
+    if (!rate.allowed) {
+      return res.status(429).json({
+        error: `Limite de coment\xE1rios atingido. Tente novamente em ${rate.retryAfterMinutes} min.`,
+        retryAfterMinutes: rate.retryAfterMinutes
+      });
+    }
+    const taskRes = await query("SELECT id, key, title, board_id, assignee_id, assignee_ids FROM tasks WHERE id = $1", [
+      link.task_id
+    ]);
+    if (!taskRes.rows.length) return genericNotFound(res);
+    const task = taskRes.rows[0];
+    const commentId = `tpc-${Date.now()}-${crypto3.randomBytes(4).toString("hex")}`;
+    await query(
+      `INSERT INTO task_public_comments (id, link_id, task_id, visitor_name, body, ip_hash)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [commentId, link.id, link.task_id, name, body, ipHash]
+    );
+    await notifyVisitorComment(task, name, body).catch(
+      (e) => console.error("notifyVisitorComment falhou:", e?.message || e)
+    );
+    res.status(201).json({
+      success: true,
+      comment: { id: commentId, visitorName: name, body, createdAt: (/* @__PURE__ */ new Date()).toISOString() }
+    });
+  } catch (error) {
+    console.error("Public task comment failed:", error);
+    res.status(500).json({ error: "Erro ao registrar coment\xE1rio" });
+  }
+});
+async function notifyVisitorComment(task, visitorName, body) {
+  const ids = [];
+  const parsed = safeJson2(task.assignee_ids, []);
+  if (Array.isArray(parsed)) ids.push(...parsed.filter((x) => typeof x === "string" && x));
+  if (task.assignee_id) ids.push(task.assignee_id);
+  const unique = [...new Set(ids)];
+  if (!unique.length) return;
+  const mRes = await query("SELECT id, name, email FROM members WHERE id = ANY($1)", [unique]);
+  const members = mRes.rows.filter((m) => m.email);
+  if (!members.length) return;
+  const preview = `${visitorName}: ${body}`.slice(0, 300);
+  await query(
+    `INSERT INTO activity_logs (id, type, task_id, task_key, task_title, member_id, member_name, details, timestamp)
+     VALUES ($1, 'comment_added', $2, $3, $4, $5, $6, $7, NOW())`,
+    [
+      `act-${Date.now()}-${crypto3.randomBytes(3).toString("hex")}`,
+      task.id,
+      task.key,
+      task.title,
+      members[0].id,
+      members[0].name,
+      `Coment\xE1rio p\xFAblico de ${visitorName}`
+    ]
+  );
+  const settingsRes = await query("SELECT * FROM email_settings LIMIT 1");
+  const settings = settingsRes.rows[0];
+  if (!settings?.enabled) return;
+  for (const m of members) {
+    try {
+      await query(
+        `INSERT INTO email_notifications
+           (id, trigger_type, task_id, task_key, task_title, recipient_email, recipient_name,
+            sender_name, subject, content_preview, html_body, status, timestamp, read, member_id, created_at)
+         VALUES ($1, 'public_comment', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, false, $12, now())`,
+        [
+          `em-${Date.now()}-${crypto3.randomBytes(4).toString("hex")}`,
+          task.id,
+          task.key,
+          task.title,
+          m.email,
+          m.name,
+          settings.sender_name || "Brolabs Workflow",
+          `Novo coment\xE1rio p\xFAblico em ${task.key}`,
+          preview,
+          `<p>Ol\xE1 ${escHtml(m.name)},</p><p><strong>${escHtml(visitorName)}</strong> comentou na tarefa ${escHtml(
+            task.key
+          )}:</p><p>${escHtml(body).slice(0, 1e3)}</p>`,
+          (/* @__PURE__ */ new Date()).toISOString(),
+          m.id
+        ]
+      );
+    } catch (e) {
+      console.error("public_comment email enqueue falhou:", e?.message || e);
+    }
+  }
+}
+
+// src/server/taskSummary.ts
+var SUMMARY_MAX_COMMENT_CHARS = 400;
+var SUMMARY_MAX_COMMENTS = 40;
+var SUMMARY_MAX_WORKLOGS = 100;
+function computeWorklogStats(worklogs) {
+  const map = /* @__PURE__ */ new Map();
+  let totalHours = 0;
+  for (const w of worklogs) {
+    const hours = Number(w.hours) || 0;
+    totalHours += hours;
+    const name = (w.memberName || "Desconhecido").trim() || "Desconhecido";
+    map.set(name, (map.get(name) || 0) + hours);
+  }
+  const hoursByMember = [...map.entries()].map(([name, hours]) => ({ name, hours: Math.round(hours * 100) / 100 })).sort((a, b) => b.hours - a.hours);
+  return {
+    count: worklogs.length,
+    totalHours: Math.round(totalHours * 100) / 100,
+    hoursByMember
+  };
+}
+function isEmptySource(source) {
+  return source.comments.length === 0 && source.worklogs.length === 0;
+}
+function buildSummaryContext(source) {
+  const stats = computeWorklogStats(source.worklogs);
+  const truncated = source.comments.length > SUMMARY_MAX_COMMENTS || source.worklogs.length > SUMMARY_MAX_WORKLOGS;
+  const comments = source.comments.slice(0, SUMMARY_MAX_COMMENTS).map((c) => `- ${c.authorName}: ${String(c.text || "").slice(0, SUMMARY_MAX_COMMENT_CHARS)}`).join("\n");
+  const worklogs = source.worklogs.slice(0, SUMMARY_MAX_WORKLOGS).map((w) => `- ${w.memberName}: ${w.hours}h em ${w.date}${w.comment ? ` \u2014 ${w.comment}` : ""}`).join("\n");
+  const perMember = stats.hoursByMember.map((h) => `- ${h.name}: ${h.hours}h`).join("\n") || "(nenhum)";
+  const context = `COMENT\xC1RIOS:
+${comments || "(nenhum)"}
+
+APONTAMENTOS DE TEMPO:
+${worklogs || "(nenhum)"}
+
+TOTAL DE HORAS APONTADAS: ${stats.totalHours}
+HORAS POR PESSOA:
+${perMember}`;
+  return { context, truncated, stats };
+}
+
 // server.ts
 dotenv2.config();
 var __filename = fileURLToPath2(import.meta.url);
 var __dirname = path2.dirname(__filename);
-var app = express();
+var app = express2();
 var PORT = 3e3;
 var isProduction = process.env.NODE_ENV === "production";
 var isVercel = Boolean(process.env.VERCEL);
-app.use(express.json({ limit: "10mb", verify: (req, _res, buf) => {
+app.use(express2.json({ limit: "10mb", verify: (req, _res, buf) => {
   req.rawBody = buf;
 } }));
 app.use(cookieParser());
@@ -2265,7 +2791,7 @@ var avatarsDir = path2.resolve(bucketDir, "avatars");
 if (!isVercel && !fs2.existsSync(avatarsDir)) {
   fs2.mkdirSync(avatarsDir, { recursive: true });
 }
-app.use("/bucket", express.static(bucketDir));
+app.use("/bucket", express2.static(bucketDir));
 var dbReady = null;
 if (isVercel) {
   app.use("/api", async (req, res, next) => {
@@ -2304,7 +2830,7 @@ app.use((req, res, next) => {
 });
 app.use((req, res, next) => {
   if (!req.path.startsWith("/api")) return next();
-  const requestId = String(req.headers["x-request-id"] || crypto3.randomUUID());
+  const requestId = String(req.headers["x-request-id"] || crypto4.randomUUID());
   const start = Date.now();
   res.header("X-Request-Id", requestId);
   res.on("finish", () => {
@@ -2369,7 +2895,7 @@ app.use((req, res, next) => {
   }
   next();
 });
-function safeJson2(val, fallback = []) {
+function safeJson3(val, fallback = []) {
   if (val === null || val === void 0) return fallback;
   if (typeof val === "object") return val;
   if (typeof val === "string") {
@@ -2403,8 +2929,8 @@ function mapDbBoard(row) {
     sprintGoal: row.sprint_goal || "",
     sprintStartDate: row.sprint_start_date || "",
     sprintEndDate: row.sprint_end_date || "",
-    columns: safeJson2(row.columns, []),
-    epics: safeJson2(row.epics, []),
+    columns: safeJson3(row.columns, []),
+    epics: safeJson3(row.epics, []),
     version: parseInt(row.version, 10) || 1
   };
 }
@@ -2422,7 +2948,7 @@ function mapDbMember(row) {
 }
 function mapDbTask(row) {
   const assigneeIds = normalizeAssigneeIds(
-    safeJson2(row.assignee_ids, []),
+    safeJson3(row.assignee_ids, []),
     row.assignee_id ? [row.assignee_id] : []
   );
   return {
@@ -2445,11 +2971,11 @@ function mapDbTask(row) {
     dueDate: row.due_date || "",
     createdAt: row.created_at || "",
     updatedAt: row.updated_at || "",
-    subtasks: safeJson2(row.subtasks, []),
-    worklogs: safeJson2(row.worklogs, []),
-    comments: safeJson2(row.comments, []),
-    tags: safeJson2(row.tags, []),
-    dependencies: safeJson2(row.dependencies, []),
+    subtasks: safeJson3(row.subtasks, []),
+    worklogs: safeJson3(row.worklogs, []),
+    comments: safeJson3(row.comments, []),
+    tags: safeJson3(row.tags, []),
+    dependencies: safeJson3(row.dependencies, []),
     archivedAt: row.archived_at || null,
     archivedBy: row.archived_by || null
   };
@@ -2777,7 +3303,7 @@ async function ensureTagsExist(tags, memberId) {
     await query(
       `INSERT INTO tags (id, name, color, created_by)
        VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-      [`tag-${crypto3.randomUUID().slice(0, 8)}`, name, "#64748b", memberId]
+      [`tag-${crypto4.randomUUID().slice(0, 8)}`, name, "#64748b", memberId]
     );
   }
 }
@@ -2785,7 +3311,7 @@ function taskDeepLink(taskId) {
   const base = (process.env.APP_URL || "").replace(/\/$/, "");
   return `${base}/?task=${taskId}`;
 }
-function escHtml(s) {
+function escHtml2(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 async function resolveMentionMembers(comments, authorId) {
@@ -2844,7 +3370,7 @@ async function notifyAssignment(task, newAssigneeIds) {
         if (dup.rowCount) continue;
         const subject = `Voc\xEA foi designado(a) \xE0 tarefa ${task.key}`;
         const preview = `${task.title} \u2014 abra a tarefa no Brolabs Workflow.`;
-        const html = `<p>Ol\xE1 ${escHtml(m.name)},</p><p>Voc\xEA foi designado(a) \xE0 tarefa <strong>${escHtml(task.key)} \u2014 ${escHtml(task.title)}</strong>.</p>`;
+        const html = `<p>Ol\xE1 ${escHtml2(m.name)},</p><p>Voc\xEA foi designado(a) \xE0 tarefa <strong>${escHtml2(task.key)} \u2014 ${escHtml2(task.title)}</strong>.</p>`;
         await query(
           `INSERT INTO email_notifications
              (id, trigger_type, task_id, task_key, task_title, recipient_email, recipient_name,
@@ -2879,7 +3405,7 @@ async function fireTaskUpdateEvents(current, merged, updates) {
   try {
     if (updates.statusId && updates.statusId !== current.statusId) {
       const boardRes = await query("SELECT columns FROM boards WHERE id = $1", [current.boardId]);
-      const cols = safeJson2(boardRes.rows[0]?.columns, []);
+      const cols = safeJson3(boardRes.rows[0]?.columns, []);
       const doneColId = cols.find((c) => c.isDone)?.id ?? "col-done";
       if (merged.statusId === doneColId) {
         dispatchEvent(
@@ -3128,7 +3654,7 @@ app.post("/api/tasks/:id/analyze", authenticateToken, async (req, res) => {
       return res.status(429).json({ error: `Limite de 20 usos/h atingido. Tente em ${minutes} min`, retryAfterMinutes: minutes });
     }
     const boardRes = await query("SELECT columns FROM boards WHERE id = $1", [task.boardId]);
-    const cols = safeJson2(boardRes.rows[0]?.columns, []);
+    const cols = safeJson3(boardRes.rows[0]?.columns, []);
     const statusTitle = cols.find((c) => c.id === task.statusId)?.title || task.statusId;
     const memRes = await query("SELECT id, name FROM members");
     const nameOf = (id) => memRes.rows.find((m) => m.id === id)?.name || id || "(sem autor)";
@@ -3171,11 +3697,110 @@ ${context.slice(0, 2e4)}
       }
     });
   } catch (error) {
-    const status = error instanceof AiUnavailableError ? 503 : 502;
-    await logAiUsage(memberId, "task_analyze", inputChars, 0, "error").catch(() => {
+    const mapped = mapAiError(error);
+    await logAiUsage(
+      memberId,
+      "task_analyze",
+      inputChars,
+      0,
+      mapped.status === 429 ? "rate_limited" : "error"
+    ).catch(() => {
     });
     console.error("Task analyze failed:", error);
-    res.status(status).json({ error: error.message || "Falha na IA" });
+    res.status(mapped.status).json(mapped.body);
+  }
+});
+app.post("/api/tasks/:id/summary", authenticateToken, async (req, res) => {
+  const memberId = req.memberId;
+  let inputChars = 0;
+  try {
+    const taskRes = await query("SELECT * FROM tasks WHERE id = $1", [req.params.id]);
+    if (!taskRes.rows.length) return res.status(404).json({ error: "Tarefa n\xE3o encontrada" });
+    const task = mapDbTask(taskRes.rows[0]);
+    const eff = await resolvePermissions(memberId, task.boardId);
+    if (!eff || !eff.canEditTask) {
+      return res.status(403).json({ error: "Sem permiss\xE3o para resumir esta tarefa" });
+    }
+    const memRes = await query("SELECT id, name FROM members");
+    const nameOf = (id) => memRes.rows.find((m) => m.id === id)?.name || id || "(sem autor)";
+    const internalComments = (task.comments || []).map((c) => ({
+      authorName: nameOf(c.authorId),
+      text: String(c.text || ""),
+      createdAt: c.createdAt
+    }));
+    let visitorComments = [];
+    try {
+      const vRes = await query(
+        `SELECT visitor_name, body, created_at FROM task_public_comments
+         WHERE task_id = $1 AND removed_at IS NULL ORDER BY created_at ASC`,
+        [task.id]
+      );
+      visitorComments = vRes.rows.map((c) => ({
+        authorName: `Visitante: ${c.visitor_name}`,
+        text: String(c.body || ""),
+        createdAt: c.created_at
+      }));
+    } catch {
+    }
+    const worklogs = (task.worklogs || []).map((w) => ({
+      memberName: nameOf(w.memberId),
+      hours: Number(w.hours) || 0,
+      date: w.date || "",
+      comment: w.comment || ""
+    }));
+    const source = { comments: [...internalComments, ...visitorComments], worklogs };
+    const stats = computeWorklogStats(worklogs);
+    if (isEmptySource(source)) {
+      return res.status(200).json({
+        content: "",
+        empty: true,
+        message: "N\xE3o h\xE1 coment\xE1rios ou apontamentos de tempo para resumir.",
+        stats
+      });
+    }
+    if (!aiConfigured()) {
+      await logAiUsage(memberId, "task_summary", 0, 0, "error");
+      return res.status(503).json({ error: "IA n\xE3o configurada", unavailable: true });
+    }
+    const retryAfter = await checkAiRateLimit(memberId);
+    if (retryAfter) {
+      await logAiUsage(memberId, "task_summary", 0, 0, "rate_limited");
+      const minutes = Math.max(1, Math.ceil((retryAfter.getTime() - Date.now()) / 6e4));
+      return res.status(429).json({ error: `Limite de 20 usos/h atingido. Tente em ${minutes} min`, retryAfterMinutes: minutes });
+    }
+    const built = buildSummaryContext(source);
+    inputChars = built.context.length;
+    const prompt = `Resuma a discuss\xE3o e o tempo gasto da tarefa abaixo (pt-BR, markdown limpo, sem pre\xE2mbulo).
+(1) DECIS\xD5ES: decis\xF5es tomadas, com autor quando identific\xE1vel.
+(2) PEND\xCANCIAS: pontos em aberto, bloqueios e pr\xF3ximos passos.
+(3) TEMPO: horas por pessoa e total (use exatamente os n\xFAmeros do contexto).
+N\xE3o invente informa\xE7\xF5es que n\xE3o estejam no contexto. Se houver truncamento ({TRUNCADO}), avise que o resumo \xE9 parcial.
+
+<<<CONTEXTO>>>
+${built.context.slice(0, 2e4)}
+<<<END>>>`;
+    const output = await runAi(prompt);
+    await logAiUsage(memberId, "task_summary", inputChars, output.length, "ok");
+    res.json({
+      content: output,
+      truncated: built.truncated,
+      stats: built.stats,
+      usage: {
+        action: "task_summary",
+        inputChars,
+        outputChars: output.length,
+        provider: aiProvider(),
+        model: aiModel()
+      }
+    });
+  } catch (error) {
+    const mapped = mapAiError(error);
+    await logAiUsage(memberId, "task_summary", inputChars, 0, mapped.status === 429 ? "rate_limited" : "error").catch(
+      () => {
+      }
+    );
+    console.error("Task summary failed:", error);
+    res.status(mapped.status).json(mapped.body);
   }
 });
 app.delete("/api/tasks/:id", authenticateToken, async (req, res) => {
@@ -3242,7 +3867,7 @@ app.post("/api/tasks/:id/archive", authenticateToken, async (req, res) => {
       if (force && blockingTaskIds.length > 0) {
         for (const blockerTaskId of blockingTaskIds) {
           const row = boardTasksRes.rows.find((r) => r.id === blockerTaskId);
-          const deps = safeJson2(row?.dependencies, []).filter(
+          const deps = safeJson3(row?.dependencies, []).filter(
             (d) => !(d.type === "is_blocked_by" && d.targetTaskId === task.id)
           );
           await client2.query("UPDATE tasks SET dependencies = $1 WHERE id = $2", [
@@ -3250,7 +3875,7 @@ app.post("/api/tasks/:id/archive", authenticateToken, async (req, res) => {
             blockerTaskId
           ]);
         }
-        const taskDeps = safeJson2(taskRes.rows[0].dependencies, []).filter(
+        const taskDeps = safeJson3(taskRes.rows[0].dependencies, []).filter(
           (d) => !(d.type === "blocks" && blockingTaskIds.some((bid) => bid === d.targetTaskId))
         );
         await client2.query(
@@ -3437,7 +4062,7 @@ app.post(
     try {
       const { id } = req.params;
       const expiresInDays = req.body.expiresInDays ?? 90;
-      const token = crypto3.randomBytes(32).toString("hex");
+      const token = crypto4.randomBytes(32).toString("hex");
       const r = await query(
         `UPDATE boards
          SET visibility = 'public', share_token = $1,
@@ -3515,7 +4140,7 @@ app.get("/api/public/boards/:token", async (req, res) => {
     );
     const rawWithIds = tasksRes.rows.map((t) => ({
       t,
-      ids: normalizeAssigneeIds(safeJson2(t.assignee_ids, []), t.assignee_id ? [t.assignee_id] : [])
+      ids: normalizeAssigneeIds(safeJson3(t.assignee_ids, []), t.assignee_id ? [t.assignee_id] : [])
     }));
     const allAssigneeIds = [...new Set(rawWithIds.flatMap((x) => x.ids))];
     const nameById = /* @__PURE__ */ new Map();
@@ -3524,8 +4149,8 @@ app.get("/api/public/boards/:token", async (req, res) => {
       for (const r2 of mRes.rows) nameById.set(String(r2.id), String(r2.name));
     }
     const publicTasks = rawWithIds.map(({ t, ids }) => {
-      const comments = safeJson2(t.comments, []);
-      const subtasks = safeJson2(t.subtasks, []);
+      const comments = safeJson3(t.comments, []);
+      const subtasks = safeJson3(t.subtasks, []);
       const assigneeNames = ids.map((id) => nameById.get(id)).filter((n) => Boolean(n));
       return {
         id: t.id,
@@ -3538,7 +4163,7 @@ app.get("/api/public/boards/:token", async (req, res) => {
         assigneeNames,
         dueDate: t.due_date || "",
         storyPoints: parseInt(t.story_points, 10) || 0,
-        tags: safeJson2(t.tags, []),
+        tags: safeJson3(t.tags, []),
         subtasks: (Array.isArray(subtasks) ? subtasks : []).map((s) => ({
           title: String(s?.title ?? ""),
           completed: Boolean(s?.completed)
@@ -3558,8 +4183,8 @@ app.get("/api/public/boards/:token", async (req, res) => {
         sprintGoal: b.sprint_goal || "",
         sprintStartDate: b.sprint_start_date || "",
         sprintEndDate: b.sprint_end_date || "",
-        columns: safeJson2(b.columns, []),
-        epics: safeJson2(b.epics, [])
+        columns: safeJson3(b.columns, []),
+        epics: safeJson3(b.epics, [])
       },
       tasks: publicTasks
     });
@@ -3568,6 +4193,7 @@ app.get("/api/public/boards/:token", async (req, res) => {
     res.status(500).json({ error: "Erro ao carregar quadro p\xFAblico" });
   }
 });
+app.use("/api", publicTaskRouter);
 async function updateBoardColumnsWithLock(boardId, newColumns, expectedVersion) {
   const res = await query(
     `UPDATE boards SET columns = $1, version = version + 1, updated_at = NOW()
@@ -3588,7 +4214,7 @@ async function updateBoardColumnsWithLock(boardId, newColumns, expectedVersion) 
   }
   return {
     ok: true,
-    columns: safeJson2(res.rows[0].columns, []),
+    columns: safeJson3(res.rows[0].columns, []),
     version: parseInt(res.rows[0].version, 10)
   };
 }
@@ -4112,7 +4738,7 @@ app.post("/api/webhooks/incoming", async (req, res) => {
       if (t.description != null) set("description", String(t.description).slice(0, 2e4));
       if (t.statusId) {
         const boardRes = await query("SELECT columns FROM boards WHERE id = $1", [current.boardId]);
-        const cols = safeJson2(boardRes.rows[0]?.columns, []);
+        const cols = safeJson3(boardRes.rows[0]?.columns, []);
         if (!cols.some((c) => c.id === String(t.statusId))) {
           return res.status(400).json({ error: "statusId inv\xE1lido para este board" });
         }
@@ -4364,7 +4990,7 @@ app.get("/api/cron/process-emails", async (req, res) => {
     if (!secret) return res.status(503).json({ error: "CRON_SECRET n\xE3o configurado" });
     const a = Buffer.from(token);
     const b = Buffer.from(secret);
-    if (a.length !== b.length || !crypto3.timingSafeEqual(a, b)) {
+    if (a.length !== b.length || !crypto4.timingSafeEqual(a, b)) {
       return res.status(401).json({ error: "Token inv\xE1lido" });
     }
     const result = await processOutbox(50);
@@ -4456,7 +5082,7 @@ app.post(
           error: "Storage n\xE3o configurado. Defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no ambiente."
         });
       }
-      const attachmentId = `att-${Date.now()}-${crypto3.randomBytes(4).toString("hex")}`;
+      const attachmentId = `att-${Date.now()}-${crypto4.randomBytes(4).toString("hex")}`;
       const storagePath = attachmentPath(taskRow.board_id, req.params.id, attachmentId, filename);
       const { data, error } = await supabase.storage.from(storageBucket()).createSignedUploadUrl(storagePath);
       if (error || !data) {
@@ -4586,7 +5212,7 @@ app.get("/api/cron/cleanup-attachments", async (req, res) => {
     }
     const a = Buffer.from(token);
     const b = Buffer.from(secret);
-    if (a.length !== b.length || !crypto3.timingSafeEqual(a, b)) {
+    if (a.length !== b.length || !crypto4.timingSafeEqual(a, b)) {
       return res.status(401).json({ error: "Token inv\xE1lido" });
     }
     const supabase = getStorage();
@@ -4826,7 +5452,7 @@ async function buildTodoSuggestions(memberId, today) {
   const linked = new Set(linkedRes.rows.map((r) => r.source_task_id));
   const boardMeta = /* @__PURE__ */ new Map();
   for (const b of boardsRes.rows) {
-    const cols = safeJson2(b.columns, []);
+    const cols = safeJson3(b.columns, []);
     const doneIds = new Set(
       cols.filter((c) => c.isDone).map((c) => String(c.id))
     );
@@ -4888,7 +5514,7 @@ app.post("/api/todos", authenticateToken, validateBody(todoCreateSchema), async 
       `SELECT COALESCE(MAX(position), -1) + 1 AS p FROM daily_todos WHERE member_id = $1 AND due_date = $2::date`,
       [req.memberId, targetDate]
     );
-    const id = `todo-${crypto3.randomUUID().slice(0, 8)}`;
+    const id = `todo-${crypto4.randomUUID().slice(0, 8)}`;
     const r = await query(
       `INSERT INTO daily_todos (id, member_id, board_id, title, due_date, source_task_id, position)
        VALUES ($1, $2, $3, $4, $5::date, $6, $7) RETURNING *`,
@@ -4977,7 +5603,7 @@ app.post("/api/todos/from-task/:taskId", authenticateToken, async (req, res) => 
       [req.memberId, today]
     );
     const due = t.due_date ? String(t.due_date).slice(0, 10) : today;
-    const id = `todo-${crypto3.randomUUID().slice(0, 8)}`;
+    const id = `todo-${crypto4.randomUUID().slice(0, 8)}`;
     const r = await query(
       `INSERT INTO daily_todos (id, member_id, board_id, title, due_date, source_task_id, position)
        VALUES ($1, $2, $3, $4, $5::date, $6, $7) RETURNING *`,
@@ -5034,7 +5660,7 @@ app.post("/api/notes", authenticateToken, validateBody(noteCreateSchema), async 
     const eff = await resolvePermissions(req.memberId, boardId);
     if (!eff) return res.status(403).json({ error: "Sem acesso a este quadro" });
     if (eff.role === "viewer") return res.status(403).json({ error: "Sem permiss\xE3o para criar notas" });
-    const id = `note-${crypto3.randomUUID().slice(0, 8)}`;
+    const id = `note-${crypto4.randomUUID().slice(0, 8)}`;
     const r = await query(
       `INSERT INTO notes (id, board_id, member_id, title, content)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -5137,11 +5763,13 @@ ${note.content.slice(0, 2e4)}
       usage: { action, inputChars, outputChars: output.length, provider: aiProvider(), model: aiModel() }
     });
   } catch (error) {
-    const status = error instanceof AiUnavailableError ? 503 : 502;
-    await logAiUsage(memberId, action, inputChars, 0, "error").catch(() => {
-    });
+    const mapped = mapAiError(error);
+    await logAiUsage(memberId, action, inputChars, 0, mapped.status === 429 ? "rate_limited" : "error").catch(
+      () => {
+      }
+    );
     console.error("Note AI action failed:", error);
-    res.status(status).json({ error: error.message || "Falha na IA" });
+    res.status(mapped.status).json(mapped.body);
   }
 });
 app.post("/api/notes/ai/from-sprint", authenticateToken, validateBody(noteFromSprintSchema), async (req, res) => {
@@ -5175,7 +5803,7 @@ app.post("/api/notes/ai/from-sprint", authenticateToken, validateBody(noteFromSp
     );
     const aiTaskRows = tasksRes.rows.map((t) => ({
       t,
-      ids: normalizeAssigneeIds(safeJson2(t.assignee_ids, []), t.assignee_id ? [t.assignee_id] : [])
+      ids: normalizeAssigneeIds(safeJson3(t.assignee_ids, []), t.assignee_id ? [t.assignee_id] : [])
     }));
     const aiAssigneeIds = [...new Set(aiTaskRows.flatMap((x) => x.ids))];
     const aiNameById = /* @__PURE__ */ new Map();
@@ -5184,7 +5812,7 @@ app.post("/api/notes/ai/from-sprint", authenticateToken, validateBody(noteFromSp
       for (const r2 of mRes.rows) aiNameById.set(String(r2.id), String(r2.name));
     }
     const statusTitle = new Map(
-      safeJson2(board.columns, []).map((c) => [String(c.id), String(c.title || "")])
+      safeJson3(board.columns, []).map((c) => [String(c.id), String(c.title || "")])
     );
     const lines = aiTaskRows.map(({ t, ids }) => {
       const responsible = ids.map((id2) => aiNameById.get(id2)).filter(Boolean).join(", ");
@@ -5200,7 +5828,7 @@ N\xE3o invente dados. Use apenas o contexto.
 ${context}
 <<<END>>>`;
     const output = await runAi(prompt);
-    const id = `note-${crypto3.randomUUID().slice(0, 8)}`;
+    const id = `note-${crypto4.randomUUID().slice(0, 8)}`;
     const r = await query(
       `INSERT INTO notes (id, board_id, member_id, title, content, ai_generated)
        VALUES ($1, $2, $3, $4, $5, true) RETURNING *`,
@@ -5287,7 +5915,7 @@ app.post("/api/tags", authenticateToken, validateBody(tagCreateSchema), async (r
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: "Etiqueta j\xE1 existe com esse nome", tag: mapTag(existing.rows[0], 0) });
     }
-    const id = `tag-${crypto3.randomUUID().slice(0, 8)}`;
+    const id = `tag-${crypto4.randomUUID().slice(0, 8)}`;
     const r = await query(
       "INSERT INTO tags (id, name, color, created_by) VALUES ($1, $2, $3, $4) RETURNING *",
       [id, name, color || "#64748b", req.memberId]
@@ -5438,7 +6066,7 @@ async function startServer() {
       console.log("\u26A1 Vite development middlewares mounted");
     } else {
       const distPath = path2.resolve(__dirname, "dist");
-      app.use(express.static(distPath));
+      app.use(express2.static(distPath));
       app.get("*", (req, res) => {
         res.sendFile(path2.resolve(distPath, "index.html"));
       });

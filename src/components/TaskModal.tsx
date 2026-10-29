@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   X,
   Trash2,
@@ -30,9 +30,12 @@ import {
   Archive,
   Sparkles,
   RefreshCw,
+  Globe,
+  GitCommit,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { IssueType, Priority, Task, DependencyType } from '../types';
+import { IssueType, Priority, Task, DependencyType, TaskPublicLink, VisitorComment, TaskCommit } from '../types';
+import { api } from '../services/api';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 import { AttachmentSection } from './AttachmentSection';
 import {
@@ -109,6 +112,65 @@ export const TaskModal: React.FC = () => {
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiCopied, setAiCopied] = useState(false);
 
+  // IA: resumo de comentários/worklogs (S3, item 8)
+  const [summaryRunning, setSummaryRunning] = useState(false);
+  const [summaryResult, setSummaryResult] = useState<string | null>(null);
+  const [summaryError, setSummaryError] = useState<string | null>(null);
+  const [summaryNotice, setSummaryNotice] = useState<string | null>(null);
+  const [summaryCopied, setSummaryCopied] = useState(false);
+  const [summaryTruncated, setSummaryTruncated] = useState(false);
+
+  // Tarefa pública + comentários de visitante (S3, item 3)
+  const [publicLink, setPublicLink] = useState<TaskPublicLink | null>(null);
+  const [publicComments, setPublicComments] = useState<VisitorComment[]>([]);
+  const [publicBusy, setPublicBusy] = useState(false);
+  const [publicError, setPublicError] = useState<string | null>(null);
+  const [publicCopied, setPublicCopied] = useState(false);
+
+  // Commits do GitHub (S4, item 4)
+  const [taskCommits, setTaskCommits] = useState<TaskCommit[]>([]);
+  const [commitsLoading, setCommitsLoading] = useState(false);
+
+  const canManageBoard = can('canManageBoard', task?.boardId);
+
+  useEffect(() => {
+    if (!task || !canManageBoard) {
+      setPublicLink(null);
+      setPublicComments([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getTaskPublicLink(task.id)
+      .then((l) => !cancelled && setPublicLink(l))
+      .catch(() => !cancelled && setPublicLink(null));
+    api
+      .getTaskPublicComments(task.id)
+      .then((r) => !cancelled && setPublicComments(r.comments || []))
+      .catch(() => !cancelled && setPublicComments([]));
+    api
+      .getTaskCommits(task.id)
+      .then((r) => !cancelled && setTaskCommits(r.commits || []))
+      .catch(() => !cancelled && setTaskCommits([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.id, canManageBoard]);
+
+  useEffect(() => {
+    if (!task) return;
+    let cancelled = false;
+    setCommitsLoading(true);
+    api
+      .getTaskCommits(task.id)
+      .then((r) => !cancelled && setTaskCommits(r.commits || []))
+      .catch(() => !cancelled && setTaskCommits([]))
+      .finally(() => !cancelled && setCommitsLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [task?.id]);
+
   if (!task) return null;
 
   const runAnalysis = async () => {
@@ -121,6 +183,86 @@ export const TaskModal: React.FC = () => {
       setAiError(err?.message || 'Falha na análise');
     } finally {
       setAiRunning(false);
+    }
+  };
+
+  const runSummary = async () => {
+    setSummaryRunning(true);
+    setSummaryError(null);
+    setSummaryNotice(null);
+    setSummaryTruncated(false);
+    try {
+      const res = await api.runTaskSummary(task.id);
+      if (res.empty) {
+        setSummaryResult(null);
+        setSummaryNotice(res.message || 'Nada para resumir nesta tarefa.');
+      } else {
+        setSummaryResult(res.content);
+        setSummaryTruncated(Boolean((res as any).truncated));
+      }
+    } catch (err: any) {
+      setSummaryError(err?.message || 'Falha ao resumir');
+    } finally {
+      setSummaryRunning(false);
+    }
+  };
+
+  const createPublicLink = async () => {
+    setPublicBusy(true);
+    setPublicError(null);
+    try {
+      const link = await api.createTaskPublicLink(task.id);
+      setPublicLink({
+        active: true,
+        token: link.token,
+        url: link.url,
+        expiresAt: link.expiresAt,
+        allowComments: link.allowComments ?? true,
+      });
+    } catch (err: any) {
+      setPublicError(err?.message || 'Falha ao gerar o link público');
+    } finally {
+      setPublicBusy(false);
+    }
+  };
+
+  const revokePublicLink = async () => {
+    setPublicBusy(true);
+    setPublicError(null);
+    try {
+      await api.revokeTaskPublicLink(task.id);
+      setPublicLink({ active: false, token: null, url: null, expiresAt: null, allowComments: false });
+    } catch (err: any) {
+      setPublicError(err?.message || 'Falha ao revogar o link público');
+    } finally {
+      setPublicBusy(false);
+    }
+  };
+
+  const togglePublicComments = async () => {
+    if (!publicLink) return;
+    setPublicBusy(true);
+    setPublicError(null);
+    try {
+      const res = await api.setTaskPublicLinkComments(task.id, !publicLink.allowComments);
+      setPublicLink((prev) => (prev ? { ...prev, allowComments: res.allowComments } : prev));
+    } catch (err: any) {
+      setPublicError(err?.message || 'Falha ao alterar os comentários públicos');
+    } finally {
+      setPublicBusy(false);
+    }
+  };
+
+  const removePublicComment = async (commentId: string) => {
+    setPublicBusy(true);
+    setPublicError(null);
+    try {
+      await api.removeTaskPublicComment(task.id, commentId);
+      setPublicComments((prev) => prev.filter((c) => c.id !== commentId));
+    } catch (err: any) {
+      setPublicError(err?.message || 'Falha ao remover o comentário');
+    } finally {
+      setPublicBusy(false);
     }
   };
 
@@ -339,6 +481,23 @@ export const TaskModal: React.FC = () => {
               </button>
             )}
 
+            {/* Resumir com IA (S3, item 8) */}
+            {can('canEditTask', task.boardId) && (
+              <button
+                onClick={runSummary}
+                disabled={summaryRunning}
+                className="flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-md font-medium transition-colors bg-sky-50 dark:bg-sky-950/50 text-sky-700 dark:text-sky-300 border border-sky-200 dark:border-sky-900 hover:bg-sky-100 dark:hover:bg-sky-950 disabled:opacity-60"
+                title="Resumir discussão e horas apontadas com IA"
+              >
+                {summaryRunning ? (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <MessageSquare className="w-3.5 h-3.5" />
+                )}
+                <span className="hidden sm:inline">{summaryRunning ? 'Resumindo…' : 'Resumir com IA'}</span>
+              </button>
+            )}
+
             {/* Quick Live Timer trigger inside modal */}
             <button
               onClick={() => {
@@ -482,6 +641,60 @@ export const TaskModal: React.FC = () => {
                   <div className="max-h-72 overflow-y-auto whitespace-pre-wrap text-xs text-slate-800 dark:text-slate-200 leading-relaxed">
                     {aiResult}
                   </div>
+                )}
+              </div>
+            )}
+
+            {/* Resumo com IA (S3, item 8) */}
+            {(summaryResult || summaryError || summaryRunning || summaryNotice) && (
+              <div className="bg-sky-50/60 dark:bg-sky-950/30 p-4 rounded-xl border border-sky-200 dark:border-sky-900 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-sky-700 dark:text-sky-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <MessageSquare className="w-3.5 h-3.5" /> Resumo da tarefa
+                  </span>
+                  <div className="flex items-center gap-3">
+                    {summaryResult && (
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(summaryResult);
+                          setSummaryCopied(true);
+                          setTimeout(() => setSummaryCopied(false), 2000);
+                        }}
+                        className="text-[11px] text-sky-600 dark:text-sky-400 hover:underline flex items-center gap-1"
+                      >
+                        {summaryCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        {summaryCopied ? 'Copiado' : 'Copiar'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        setSummaryResult(null);
+                        setSummaryError(null);
+                        setSummaryNotice(null);
+                      }}
+                      className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                      title="Fechar resumo"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+                {summaryError && <p className="text-xs text-rose-600 dark:text-rose-400">{summaryError}</p>}
+                {summaryNotice && <p className="text-xs text-slate-600 dark:text-slate-300">{summaryNotice}</p>}
+                {summaryRunning && !summaryResult && (
+                  <p className="text-xs text-slate-500 italic">Resumindo discussão e apontamentos…</p>
+                )}
+                {summaryResult && (
+                  <>
+                    {summaryTruncated && (
+                      <p className="text-[11px] italic text-amber-600 dark:text-amber-400">
+                        Resumo parcial: há mais registros do que o limite por requisição.
+                      </p>
+                    )}
+                    <div className="max-h-72 overflow-y-auto whitespace-pre-wrap text-xs text-slate-800 dark:text-slate-200 leading-relaxed">
+                      {summaryResult}
+                    </div>
+                  </>
                 )}
               </div>
             )}
@@ -1178,6 +1391,167 @@ export const TaskModal: React.FC = () => {
                   );
                 })}
               </div>
+
+              {/* Commits do GitHub (S4, item 4) */}
+              <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                    <GitCommit className="w-4 h-4 text-slate-600" />
+                    Commits do GitHub ({taskCommits.length})
+                  </span>
+                  {commitsLoading && <span className="text-[10px] text-slate-400">carregando…</span>}
+                </div>
+
+                {taskCommits.length === 0 && !commitsLoading ? (
+                  <p className="text-[11px] text-slate-400">
+                    Nenhum commit atrelado. Referencie a tarefa no push (ex.: <code>#{task.key}</code>) para
+                    vincular automaticamente.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {taskCommits.map((c) => (
+                      <div
+                        key={c.id}
+                        className="flex items-start gap-2 text-[11px] bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-lg px-2.5 py-2"
+                      >
+                        {c.authorAvatar ? (
+                          <img src={c.authorAvatar} alt={c.author || ''} className="w-5 h-5 rounded-full mt-0.5" />
+                        ) : (
+                          <GitCommit className="w-4 h-4 mt-0.5 text-slate-400" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-mono text-[10px] text-slate-500 dark:text-slate-400">
+                            {c.sha.slice(0, 7)}
+                            {c.branch ? ` · ${c.branch}` : ''}
+                          </p>
+                          <p className="text-slate-700 dark:text-slate-200 break-words">{c.message.split('\n')[0]}</p>
+                          <p className="text-[10px] text-slate-400">{c.author}</p>
+                        </div>
+                        {c.url && (
+                          <a
+                            href={c.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="text-slate-400 hover:text-indigo-600 shrink-0"
+                            title="Abrir commit no GitHub"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                          </a>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Link público + comentários de visitante (S3, item 3) */}
+              {canManageBoard && (
+                <div className="space-y-2.5 pt-2 border-t border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <span className="text-xs font-bold text-slate-900 dark:text-slate-100 flex items-center gap-2">
+                      <Globe className="w-4 h-4 text-emerald-600" />
+                      Link público da tarefa
+                    </span>
+                    {publicLink?.active ? (
+                      <div className="flex items-center gap-2">
+                        <label className="flex items-center gap-1.5 text-[11px] text-slate-600 dark:text-slate-300">
+                          <input
+                            type="checkbox"
+                            checked={publicLink.allowComments}
+                            disabled={publicBusy}
+                            onChange={togglePublicComments}
+                            className="accent-indigo-600"
+                          />
+                          Permitir comentários
+                        </label>
+                        <button
+                          onClick={revokePublicLink}
+                          disabled={publicBusy}
+                          className="px-2.5 py-1 text-[11px] rounded-md border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 disabled:opacity-60"
+                        >
+                          Revogar
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={createPublicLink}
+                        disabled={publicBusy}
+                        className="px-2.5 py-1 text-[11px] rounded-md border border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 disabled:opacity-60"
+                      >
+                        {publicBusy ? 'Gerando…' : 'Gerar link público'}
+                      </button>
+                    )}
+                  </div>
+
+                  {publicError && <p className="text-[11px] text-rose-600 dark:text-rose-400">{publicError}</p>}
+
+                  {publicLink?.active && publicLink.url && (
+                    <div className="flex items-center gap-2">
+                      <input
+                        readOnly
+                        value={publicLink.url}
+                        onFocus={(e) => e.currentTarget.select()}
+                        className="flex-1 text-[11px] font-mono px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200"
+                      />
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(publicLink.url!);
+                          setPublicCopied(true);
+                          setTimeout(() => setPublicCopied(false), 2000);
+                        }}
+                        className="text-[11px] text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 shrink-0"
+                      >
+                        {publicCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        {publicCopied ? 'Copiado' : 'Copiar'}
+                      </button>
+                      <a
+                        href={publicLink.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 shrink-0"
+                        title="Abrir visão pública"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  )}
+
+                  {publicLink?.active && publicLink.expiresAt && (
+                    <p className="text-[10px] text-slate-400">
+                      Expira em {new Date(publicLink.expiresAt).toLocaleDateString('pt-BR')}
+                    </p>
+                  )}
+
+                  {publicComments.length > 0 && (
+                    <div className="space-y-1.5 pt-1">
+                      <p className="text-[11px] font-semibold text-slate-700 dark:text-slate-200">
+                        Comentários de visitantes ({publicComments.length})
+                      </p>
+                      {publicComments.map((c) => (
+                        <div
+                          key={c.id}
+                          className="flex items-start gap-2 text-[11px] bg-amber-50/60 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/60 rounded-lg px-2.5 py-2"
+                        >
+                          <div className="flex-1">
+                            <p className="font-semibold text-amber-800 dark:text-amber-300">{c.authorName}</p>
+                            <p className="text-slate-700 dark:text-slate-200 whitespace-pre-wrap break-words">
+                              {c.text}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => removePublicComment(c.id)}
+                            disabled={publicBusy}
+                            className="text-slate-400 hover:text-rose-600 disabled:opacity-50"
+                            title="Remover comentário público"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Add comment box with @mention quick-buttons */}
               <div className="space-y-2 pt-2">
