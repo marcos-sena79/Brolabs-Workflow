@@ -12,6 +12,7 @@ export interface Member {
   weeklyCapacityHours: number;
   active: boolean;
   passwordHash?: string;
+  system_role?: string;
 }
 
 export interface SubTask {

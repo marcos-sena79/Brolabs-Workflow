@@ -14,9 +14,11 @@ import {
   MessageSquare,
   Mail,
   Server,
+  GitCommit,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { IntegrationConfig, IntegrationPlatform } from '../types';
+import { useAuth } from '../context/AuthContext';
+import { IntegrationConfig, IntegrationPlatform, GithubRepoSetting } from '../types';
 import { formatRelativeTime } from '../utils/agileHelpers';
 import { api } from '../services/api';
 
@@ -31,6 +33,8 @@ export const IntegrationsView: React.FC = () => {
     members,
     setIsEmailDrawerOpen,
   } = useAgile();
+  const { member: authMember } = useAuth();
+  const isAdmin = authMember?.system_role === 'admin';
 
   const [testingPlatform, setTestingPlatform] = useState<IntegrationPlatform | null>(null);
   const [successPlatform, setSuccessPlatform] = useState<IntegrationPlatform | null>(null);
@@ -41,6 +45,48 @@ export const IntegrationsView: React.FC = () => {
   const [smtpTestTo, setSmtpTestTo] = useState('');
   const [smtpTesting, setSmtpTesting] = useState(false);
   const [smtpTestMsg, setSmtpTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [githubSettings, setGithubSettings] = useState<GithubRepoSetting[]>([]);
+  const [githubLoading, setGithubLoading] = useState(false);
+  const [githubForm, setGithubForm] = useState({ owner: '', repo: '', secret: '' });
+  const [githubMsg, setGithubMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    api.getEmailStatus().then(setSmtpStatus).catch(() => setSmtpStatus(null));
+  }, []);
+
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const r = await api.getGithubSettings();
+        setGithubSettings(r.repositories || []);
+      } catch {
+        /* sem configuração ainda */
+      }
+    };
+    load();
+  }, []);
+
+  const handleGithubSave = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!githubForm.owner.trim() || !githubForm.repo.trim() || !githubForm.secret) return;
+    if (githubForm.secret.length < 16) {
+      setGithubMsg({ ok: false, text: 'O secret precisa de pelo menos 16 caracteres.' });
+      return;
+    }
+    setGithubLoading(true);
+    setGithubMsg(null);
+    try {
+      await api.saveGithubSetting({ owner: githubForm.owner.trim(), repo: githubForm.repo.trim(), secret: githubForm.secret });
+      setGithubMsg({ ok: true, text: 'Configuração salva (secret criptografado no banco).' });
+      const r = await api.getGithubSettings();
+      setGithubSettings(r.repositories || []);
+      setGithubForm({ owner: '', repo: '', secret: '' });
+    } catch (err: any) {
+      setGithubMsg({ ok: false, text: err?.message || 'Falha ao salvar' });
+    } finally {
+      setGithubLoading(false);
+    }
+  };
 
   useEffect(() => {
     api.getEmailStatus().then(setSmtpStatus).catch(() => setSmtpStatus(null));
@@ -562,13 +608,123 @@ export const IntegrationsView: React.FC = () => {
                 )}
               </div>
             ))}
-
+        
             {webhookLogs.length === 0 && (
               <p className="text-xs text-slate-400 italic py-6 text-center">
                 Nenhum webhook disparado recentemente. Clique em "Testar Disparo" acima.
               </p>
             )}
           </div>
+        </div>
+
+        {/* GitHub Commits (item 4 da Onda 2) — config admin */}
+        <div className="lg:col-span-12 bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-3">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+            <div className="flex items-center gap-2">
+              <span className="p-2 rounded-lg bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                <GitCommit className="w-4 h-4" />
+              </span>
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">GitHub — commits na tarefa</h3>
+                <p className="text-[11px] text-slate-400">
+                  Push com HMAC assinado e ref da tarefa (ex.: 'BRO-12') vincula commits automaticamente.
+                </p>
+              </div>
+            </div>
+            {!isAdmin && (
+              <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                Somente administrador
+              </span>
+            )}
+          </div>
+
+          {isAdmin ? (
+            <form onSubmit={handleGithubSave} className="space-y-2">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-500">Owner</label>
+                  <input
+                    value={githubForm.owner}
+                    onChange={(e) => setGithubForm({ ...githubForm, owner: e.target.value })}
+                    placeholder="ex.: brolabs"
+                    className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs outline-none focus:border-indigo-400"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-500">Repo</label>
+                  <input
+                    value={githubForm.repo}
+                    onChange={(e) => setGithubForm({ ...githubForm, repo: e.target.value })}
+                    placeholder="ex.: workflow"
+                    className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs outline-none focus:border-indigo-400"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-500">Webhook Secret</label>
+                  <input
+                    value={githubForm.secret}
+                    onChange={(e) => setGithubForm({ ...githubForm, secret: e.target.value })}
+                    type="password"
+                    placeholder="mín. 16 caracteres"
+                    className="rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 px-2.5 py-1.5 text-xs outline-none focus:border-indigo-400"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[10px] font-bold text-slate-500 block mb-1">Ação</label>
+                  <button
+                    type="submit"
+                    disabled={githubLoading}
+                    className="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-indigo-700 disabled:opacity-60"
+                  >
+                    {githubLoading ? 'Salvando…' : 'Salvar repositório'}
+                  </button>
+                </div>
+              </div>
+              {githubMsg && (
+                <p className={`text-[11px] font-semibold ${githubMsg.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                  {githubMsg.text}
+                </p>
+              )}
+              <div className="space-y-1.5">
+                {githubSettings.map((s) => (
+                  <div key={s.id} className="flex items-center justify-between gap-2 p-2 rounded-lg border border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/40">
+                    <div className="flex items-center gap-2 text-xs font-mono text-slate-700 dark:text-slate-200">
+                      <span className="font-bold">{s.owner}</span>/
+                      <span>{s.repo}</span>
+                      <span className={`text-[10px] px-1 py-0.2 rounded-full ${s.enabled ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40' : 'text-slate-400 bg-slate-100 dark:bg-slate-800'}`}>
+                        {s.enabled ? 'ativo' : 'desativado'}
+                      </span>
+                      <span className={`text-[10px] ${s.hasSecret ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`}>
+                        {s.hasSecret ? 'secret configurado' : 'sem secret'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => {
+                        if (confirm(`Remover integração GitHub ${s.owner}/${s.repo}?`)) {
+                          api.deleteGithubSetting(s.id).then(() => {
+                            setGithubSettings(githubSettings.filter((x) => x.id !== s.id));
+                            setGithubMsg({ ok: true, text: 'Integração removida.' });
+                          });
+                        }
+                      }}
+                      className="text-rose-500 hover:text-rose-700 text-xs"
+                    >
+                      Remover
+                    </button>
+                  </div>
+                ))}
+                {githubSettings.length === 0 && (
+                  <p className="text-[11px] text-slate-400 italic">
+                    Nenhum repositório configurado. O webhook do GitHub só aceita pushes de repositórios na whitelist.
+                  </p>
+                )}
+              </div>
+            </form>
+          ) : (
+            <div className="p-4 text-center text-[11px] text-slate-500">
+              Configuração restrita a administradores.
+            </div>
+          )}
         </div>
       </div>
     </div>
