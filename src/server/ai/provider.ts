@@ -1,7 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 import { query } from '../db';
 
-const TIMEOUT_MS = 25000;
+const TIMEOUT_MS = 59000;
 const RATE_LIMIT_PER_HOUR = 20;
 
 const GEMINI_DEFAULT_MODEL = 'gemini-2.5-flash';
@@ -150,7 +150,7 @@ async function runOpenRouterOnce(prompt: string): Promise<string> {
   }
 }
 
-/** Chama o provedor ativo com timeout de 25s e 1 retry (com espera de 1,5s) em 5xx/429. Lança AiFailedError. */
+/** Chama o provedor ativo com timeout de 59s e 1 retry (com espera de 1,5s) em 5xx/429. Lança AiFailedError. */
 export async function runAi(prompt: string): Promise<string> {
   const provider = aiProvider();
   if (!provider) {
