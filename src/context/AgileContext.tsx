@@ -31,6 +31,7 @@ import { useAuth } from './AuthContext';
 import { useTheme } from './ThemeContext';
 import { getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
 import { playSound, SoundEvent } from '../utils/sound';
+import { EMPTY_BOARD, EMPTY_MEMBER, resolveInitialState } from '../utils/initialDataFlow';
 
 interface ActiveTimer {
   taskId: string;
@@ -248,35 +249,12 @@ interface AgileContextType {
   resetToDemoData: () => void;
 }
 
-const DEFAULT_BOARD: Board = {
-  id: 'board-default',
-  key: 'ENG',
-  name: 'Sprint 24 - Plataforma & Core',
-  description: 'Desenvolvimento do núcleo de microsserviços e segurança.',
-  sprintName: 'Sprint 24',
-  sprintGoal: 'Finalizar módulo de autenticação e banco de dados Neon',
-  sprintStartDate: new Date().toISOString().split('T')[0],
-  sprintEndDate: new Date(Date.now() + 14 * 86400000).toISOString().split('T')[0],
-  columns: [
-    { id: 'col-backlog', title: 'Backlog', order: 0, wipLimit: 15, accentColor: '#64748b' },
-    { id: 'col-todo', title: 'A Fazer', order: 1, wipLimit: 8, accentColor: '#3b82f6' },
-    { id: 'col-inprogress', title: 'Em Andamento', order: 2, wipLimit: 5, accentColor: '#eab308' },
-    { id: 'col-review', title: 'Code Review / QA', order: 3, wipLimit: 4, accentColor: '#8b5cf6' },
-    { id: 'col-done', title: 'Concluído', order: 4, accentColor: '#10b981', isDone: true },
-  ],
-  epics: [],
-};
-
-const DEFAULT_MEMBER: Member = {
-  id: 'mem-default',
-  name: 'Lucas Santos',
-  email: 'lucas.santos@techcorp.com.br',
-  avatar: '/bucket/avatars/lucas-santos.svg',
-  role: 'Tech Lead & Arquiteto',
-  department: 'Engenharia',
-  weeklyCapacityHours: 40,
-  active: true,
-};
+// Fonte de verdade: backend via GET /api/initial-state. Placeholders vazios
+// (sem dados fictícios) evitam crashes de tipagem em memos derivados quando
+// ainda não existe board/membro real — o App gateia loading/erro/vazio antes
+// de renderizar a UI (src/utils/initialDataFlow.ts).
+const EMPTY_BOARD_PLACEHOLDER = EMPTY_BOARD;
+const EMPTY_MEMBER_PLACEHOLDER = EMPTY_MEMBER;
 
 const AgileContext = createContext<AgileContextType | undefined>(undefined);
 
@@ -290,11 +268,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [isLoading, setIsLoading] = useState(true);
   const [dbConnected, setDbConnected] = useState(true);
 
-  const [boards, setBoards] = useState<Board[]>([DEFAULT_BOARD]);
-  const [currentBoardId, setCurrentBoardIdState] = useState<string>(DEFAULT_BOARD.id);
+  const [boards, setBoards] = useState<Board[]>([]);
+  const [currentBoardId, setCurrentBoardIdState] = useState<string>('');
   const [tasks, setTasks] = useState<Task[]>([]);
-  const [members, setMembers] = useState<Member[]>([DEFAULT_MEMBER]);
-  const [currentUserId, setCurrentUserIdState] = useState<string>(DEFAULT_MEMBER.id);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [currentUserId, setCurrentUserIdState] = useState<string>('');
   const [integrations, setIntegrations] = useState<IntegrationConfig[]>([]);
   const [activityLogs, setActivityLogs] = useState<ActivityItem[]>([]);
   const [webhookLogs, setWebhookLogs] = useState<WebhookLog[]>([]);
@@ -370,17 +348,16 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [tagCatalog, setTagCatalog] = useState<TagDef[]>([]);
   const [isTagsManagerOpen, setIsTagsManagerOpen] = useState(false);
 
-  // Fetch all initial data from NeonDB backend
+  // Fetch all initial data from NeonDB backend — backend é a fonte de verdade:
+  // a resposta substitui integralmente as coleções (inclusive com listas vazias);
+  // nunca mistura com dados demo/placeholder (src/utils/initialDataFlow.ts).
   const fetchDbData = useCallback(async () => {
     try {
       setIsLoading(true);
       const data = await api.getInitialState();
-      if (data.boards && data.boards.length > 0) {
-        setBoards(data.boards);
-      }
-      if (data.members && data.members.length > 0) {
-        setMembers(data.members);
-      }
+      const resolved = resolveInitialState(data);
+      setBoards(resolved.boards);
+      setMembers(resolved.members);
       setTasks(data.tasks || []);
       setActivityLogs(data.activityLogs || []);
       setIntegrations(data.integrations || []);
@@ -403,17 +380,8 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         if (data.preferences.theme) hydrateTheme(data.preferences.theme);
       }
 
-      if (data.currentBoardId) {
-        setCurrentBoardIdState(data.currentBoardId);
-      } else if (data.boards && data.boards[0]) {
-        setCurrentBoardIdState(data.boards[0].id);
-      }
-
-      if (data.currentUserId) {
-        setCurrentUserIdState(data.currentUserId);
-      } else if (data.members && data.members[0]) {
-        setCurrentUserIdState(data.members[0].id);
-      }
+      setCurrentBoardIdState(resolved.currentBoardId);
+      setCurrentUserIdState(resolved.currentUserId);
 
       // Catálogo de etiquetas global (item 2.2) — silencioso se falhar
       api.getTags().then(setTagCatalog).catch(() => {});
@@ -421,6 +389,8 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       setDbConnected(true);
     } catch (err) {
       console.error('Falha ao conectar com o backend NeonDB:', err);
+      // Sem fallback demo: em erro, o App exibe estado de desconexão
+      // (deriveAppStatus) em vez de conteúdo fictício.
       setDbConnected(false);
     } finally {
       setIsLoading(false);
@@ -676,7 +646,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
           if (activeTimer.isRunning) pauseTimer();
           else resumeTimer();
         } else {
-          const board = boards.find((b) => b.id === currentBoardId) || boards[0] || DEFAULT_BOARD;
+          const board = boards.find((b) => b.id === currentBoardId) || boards[0] || EMPTY_BOARD_PLACEHOLDER;
           const taskCandidate = tasks.find((t) => t.boardId === currentBoardId && !isTaskDone(board, t.statusId));
           if (taskCandidate) {
             startTimer(taskCandidate.id);
@@ -706,14 +676,15 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     tasks,
   ]);
 
-  // Derived current board and user
+  // Derived current board and user (placeholders vazios sem dados reais —
+  // a UI só monta quando existe board, via deriveAppStatus no App)
   const currentBoard = useMemo(() => {
-    return boards.find((b) => b.id === currentBoardId) || boards[0] || DEFAULT_BOARD;
+    return boards.find((b) => b.id === currentBoardId) || boards[0] || EMPTY_BOARD_PLACEHOLDER;
   }, [boards, currentBoardId]);
 
   const currentUser = useMemo(() => {
     if (authMember) return authMember;
-    return members.find((m) => m.id === currentUserId) || members[0] || DEFAULT_MEMBER;
+    return members.find((m) => m.id === currentUserId) || members[0] || EMPTY_MEMBER_PLACEHOLDER;
   }, [members, currentUserId, authMember]);
 
   // Tasks for current board

@@ -62,7 +62,6 @@ export const Navbar: React.FC<{ onMenuClick: () => void }> = ({ onMenuClick }) =
     dbConnected,
     isLoading,
     refetchDbData,
-    resetToDemoData,
     setIsBoardSettingsOpen,
     can,
     soundPreferences,
