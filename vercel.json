@@ -6,6 +6,9 @@
       "maxDuration": 30
     }
   },
+  "crons": [
+    { "path": "/api/cron/process-emails", "schedule": "*/5 * * * *" }
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.js" },
     { "source": "/((?!bucket/|assets/).*)", "destination": "/index.html" }

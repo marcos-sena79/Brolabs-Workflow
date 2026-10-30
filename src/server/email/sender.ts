@@ -126,6 +126,10 @@ export async function processOutbox(
       );
       result.sent++;
     } catch (err: any) {
+      console.error(
+        `Email send failed (${row.id}) [secure=${process.env.SMTP_SECURE} port=${process.env.SMTP_PORT}]:`,
+        err?.message,
+      );
       const attempts = (row.attempts || 0) + 1;
       const exhausted = attempts >= MAX_ATTEMPTS;
       await query(
