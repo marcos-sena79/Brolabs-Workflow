@@ -86,6 +86,12 @@ export const api = {
 
   async getInitialState(): Promise<InitialStateResponse> {
     const res = await fetch('/api/initial-state', { headers: getAuthHeaders() });
+    if (res.status === 401 || res.status === 403) {
+      // Token inválido/expirado (ex.: JWT_SECRET mudou): encerra a sessão local
+      localStorage.removeItem('brolabs_token');
+      localStorage.removeItem('brolabs_member');
+      window.location.reload();
+    }
     if (!res.ok) throw new Error('Falha ao carregar estado inicial do banco de dados Neon');
     return res.json();
   },
