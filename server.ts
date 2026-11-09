@@ -302,6 +302,11 @@ function mapDbMember(row: any) {
   };
 }
 
+/** Membro da própria sessão: inclui o perfil de sistema, usado para liberar telas de admin. */
+function mapAuthMember(row: any) {
+  return { ...mapDbMember(row), system_role: row.system_role };
+}
+
 function mapDbTask(row: any) {
   const assigneeIds = normalizeAssigneeIds(
     safeJson(row.assignee_ids, []),
@@ -655,7 +660,7 @@ app.post('/api/auth/login', validateBody(loginSchema), async (req, res) => {
     await updateLastLogin(memberRow.id);
 
     const token = generateToken(memberRow.id);
-    const member = mapDbMember(memberRow);
+    const member = mapAuthMember(memberRow);
 
     res.cookie('token', token, {
       httpOnly: true,
@@ -690,7 +695,7 @@ app.get('/api/auth/me', authenticateToken, async (req, res) => {
     if (!memberRow) {
       return res.status(404).json({ error: 'Membro não encontrado' });
     }
-    res.json({ success: true, member: mapDbMember(memberRow) });
+    res.json({ success: true, member: mapAuthMember(memberRow) });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }
