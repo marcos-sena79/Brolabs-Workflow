@@ -105,6 +105,23 @@ describe('rotas de anexos', () => {
     expect(mocks.blobUploadUrl).toHaveBeenCalledWith(expect.stringMatching(/^task-attachments\//), file.mimeType, file.sizeBytes);
   });
 
+  it('aceita OIDC do contexto Vercel sem variável de token estático', async () => {
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '');
+    vi.stubEnv('BLOB_STORE_ID', 'store-test');
+    vi.stubEnv('VERCEL_OIDC_TOKEN', '');
+    const key = Symbol.for('@vercel/request-context');
+    const previous = Reflect.get(globalThis, key);
+    try {
+      Reflect.set(globalThis, key, { get: () => ({ headers: { 'x-vercel-oidc-token': 'context-token' } }) });
+      expect((await request(uploadPath, 'POST', file)).status).toBe(201);
+      expect(mocks.blobUploadUrl).toHaveBeenCalledOnce();
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(globalThis, key);
+      else Reflect.set(globalThis, key, previous);
+      vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'test-token');
+    }
+  });
+
   it('recusa arquivo acima de 10 MiB, SVG e limite de 20', async () => {
     expect((await request(uploadPath, 'POST', { ...file, sizeBytes: file.sizeBytes + 1 })).status).toBe(413);
     expect((await request(uploadPath, 'POST', { ...file, filename: 'image.svg', mimeType: 'image/svg+xml' })).status).toBe(415);

@@ -1419,6 +1419,7 @@ function requireAdmin() {
 // src/server/storage.ts
 import { createClient } from "@supabase/supabase-js";
 import { del, head, issueSignedToken, presignUrl } from "@vercel/blob";
+import { getVercelOidcTokenSync } from "@vercel/oidc";
 var client = null;
 function getStorage() {
   const url = process.env.SUPABASE_URL;
@@ -1445,7 +1446,16 @@ function attachmentStorageProvider() {
   return provider;
 }
 function blobConfigured() {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN);
+  if (process.env.BLOB_READ_WRITE_TOKEN?.trim()) return true;
+  if (!process.env.BLOB_STORE_ID?.trim()) return false;
+  try {
+    return Boolean(getVercelOidcTokenSync().trim());
+  } catch (error) {
+    if (error instanceof Error && error.message === "The 'x-vercel-oidc-token' header is missing from the request.") {
+      return false;
+    }
+    throw error;
+  }
 }
 async function blobUploadUrl(pathname, mimeType, sizeBytes) {
   const validUntil = Date.now() + SIGNED_UPLOAD_TTL_SEC * 1e3;

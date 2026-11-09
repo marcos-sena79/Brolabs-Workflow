@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { del, head, issueSignedToken, presignUrl } from '@vercel/blob';
+import { getVercelOidcTokenSync } from '@vercel/oidc';
 
 let client: SupabaseClient | null = null;
 
@@ -35,8 +36,16 @@ export function attachmentStorageProvider(): AttachmentStorageProvider {
 }
 
 export function blobConfigured(): boolean {
-  return Boolean(process.env.BLOB_READ_WRITE_TOKEN ||
-    (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN));
+  if (process.env.BLOB_READ_WRITE_TOKEN?.trim()) return true;
+  if (!process.env.BLOB_STORE_ID?.trim()) return false;
+  try {
+    return Boolean(getVercelOidcTokenSync().trim());
+  } catch (error) {
+    if (error instanceof Error && error.message === "The 'x-vercel-oidc-token' header is missing from the request.") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 export async function blobUploadUrl(pathname: string, mimeType: string, sizeBytes: number): Promise<string> {

@@ -9,7 +9,8 @@ dois provedores. Avatares não usam esta configuração.
 1. Aplique as migrations com `npm run migrate` antes de ativar o novo provedor.
 2. Crie um Vercel Blob Store **privado** e conecte-o aos ambientes apropriados.
    Configure `BLOB_READ_WRITE_TOKEN` no servidor ou use OIDC da Vercel com
-   `BLOB_STORE_ID` e `VERCEL_OIDC_TOKEN`. Para desenvolvimento local, configure
+   `BLOB_STORE_ID` e token OIDC gerenciado pela Vercel (disponível no contexto
+   da requisição ou em `VERCEL_OIDC_TOKEN`). Para desenvolvimento local, configure
    credenciais adequadas ao ambiente. Nunca coloque credenciais em variáveis
    `VITE_` ou no código cliente.
 3. Mantenha `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` e
@@ -19,6 +20,15 @@ dois provedores. Avatares não usam esta configuração.
    `ATTACHMENT_STORAGE_PROVIDER=vercel_blob` para ativar novos uploads. O padrão
    `supabase` permite ativação gradual. `/api/health` informa o estado de
    configuração do provedor selecionado e do legado, sem verificar conectividade.
+
+Se a rota de upload retornar 503, consulte a mensagem JSON da resposta: para
+`Vercel Blob não configurado`, confirme que o store está conectado ao projeto e
+ao ambiente correto e que `BLOB_STORE_ID` e o OIDC gerenciado pela Vercel estão
+disponíveis, ou configure o token de leitura/escrita. Se a mensagem mencionar
+Supabase, confirme também `ATTACHMENT_STORAGE_PROVIDER=vercel_blob`; quando
+essa variável não está definida, o provedor selecionado é Supabase. Faça um
+novo deploy após alterar variáveis do projeto. Não compartilhe os valores dos
+tokens ao investigar.
 
 O navegador envia o arquivo diretamente para o Blob usando uma URL restrita ao
 caminho, MIME, tamanho e prazo. As regras existentes continuam: 10 MiB por

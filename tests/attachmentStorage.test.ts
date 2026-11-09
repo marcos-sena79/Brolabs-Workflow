@@ -10,6 +10,7 @@ vi.mock('@vercel/blob', () => sdk);
 
 import {
   attachmentStorageProvider,
+  blobConfigured,
   blobDownloadUrl,
   blobStat,
   blobUploadUrl,
@@ -39,6 +40,35 @@ describe('storage de anexos', () => {
     expect(attachmentStorageProvider()).toBe('vercel_blob');
     vi.stubEnv('ATTACHMENT_STORAGE_PROVIDER', 'outro');
     expect(() => attachmentStorageProvider()).toThrow();
+  });
+
+  it('reconhece credenciais OIDC fornecidas no contexto da requisição Vercel', () => {
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '');
+    vi.stubEnv('BLOB_STORE_ID', 'store-test');
+    vi.stubEnv('VERCEL_OIDC_TOKEN', '');
+    const key = Symbol.for('@vercel/request-context');
+    const previous = Reflect.get(globalThis, key);
+    try {
+      Reflect.set(globalThis, key, { get: () => ({ headers: { 'x-vercel-oidc-token': 'context-token' } }) });
+      expect(blobConfigured()).toBe(true);
+      Reflect.set(globalThis, key, { get: () => ({}) });
+      expect(blobConfigured()).toBe(false);
+    } finally {
+      if (previous === undefined) Reflect.deleteProperty(globalThis, key);
+      else Reflect.set(globalThis, key, previous);
+    }
+  });
+
+  it('aceita token estático ou OIDC no ambiente, mas exige o store ID para OIDC', () => {
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '');
+    vi.stubEnv('VERCEL_OIDC_TOKEN', 'oidc-token');
+    vi.stubEnv('BLOB_STORE_ID', '');
+    expect(blobConfigured()).toBe(false);
+    vi.stubEnv('BLOB_STORE_ID', 'store-test');
+    expect(blobConfigured()).toBe(true);
+    vi.stubEnv('BLOB_STORE_ID', '');
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'read-write-token');
+    expect(blobConfigured()).toBe(true);
   });
 
   it('restringe PUT ao caminho, tamanho exato, MIME e cinco minutos', async () => {
