@@ -59,7 +59,7 @@ async function main() {
 
 main()
   .catch((err) => {
-    console.error('Erro:', err.code === '23505' ? 'ID ou e-mail já existe (use --update)' : err.message);
+    console.error('Erro:', err.code === '23505' ? 'ID ou e-mail já existente (use --update)' : err.message);
     process.exitCode = 1;
   })
   .finally(() => pool.end());
