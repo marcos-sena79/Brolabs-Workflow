@@ -64,13 +64,18 @@ import {
   extensionOf,
   isAllowedExtension,
   statObject,
-  removeObject,
-  listObjects,
   ATTACHMENT_MAX_BYTES,
   ATTACHMENT_MAX_PER_TASK,
-  SIGNED_UPLOAD_TTL_SEC,
   SIGNED_GET_TTL_SEC,
+  UPLOAD_CONFIRM_TTL_SEC,
+  attachmentStorageProvider,
+  blobConfigured,
+  blobUploadUrl,
+  blobDownloadUrl,
+  blobStat,
+  deleteStoredAttachment,
 } from './src/server/storage';
+import { reconcileAttachmentPage } from './src/server/attachmentReconciliation';
 import {
   smtpConfigured,
   smtpHost,
@@ -429,7 +434,10 @@ app.get('/api/health', async (req, res) => {
       totalTasks: parseInt(tasksCount.rows[0].count, 10),
       totalBoards: parseInt(boardsCount.rows[0].count, 10),
       smtp: smtpConfigured() ? 'configured' : 'unconfigured',
-      storage: getStorage() ? 'ok' : 'unconfigured',
+      storage: attachmentStorageProvider() === 'vercel_blob'
+        ? (blobConfigured() ? 'ok' : 'unconfigured')
+        : (getStorage() ? 'ok' : 'unconfigured'),
+      legacyStorage: getStorage() ? 'ok' : 'unconfigured',
       ai: aiConfigured() ? 'configured' : 'unconfigured',
       migrations: await migrationsSummary(),
     });
@@ -2763,6 +2771,51 @@ app.post(
         return res.status(415).json({ error: 'SVG não é permitido (risco de XSS)' });
       }
 
+      if (attachmentStorageProvider() === 'vercel_blob') {
+        if (!blobConfigured()) return res.status(503).json({ error: 'Vercel Blob não configurado' });
+        if (mimeType.length > 100) return res.status(400).json({ error: 'Tipo MIME inválido' });
+        const attachmentId = `att-${Date.now()}-${crypto.randomBytes(8).toString('hex')}`;
+        const storagePath = `task-attachments/${attachmentId}.${extensionOf(filename)}`;
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          const task = await client.query('SELECT id FROM tasks WHERE id = $1 FOR UPDATE', [req.params.id]);
+          if (!task.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Task not found' });
+          }
+          const count = await client.query(
+            `SELECT
+              (SELECT COUNT(*) FROM task_attachments WHERE task_id = $1) +
+              (SELECT COUNT(*) FROM attachment_uploads WHERE task_id = $1 AND expires_at > NOW()) AS n`,
+            [req.params.id]
+          );
+          if (Number(count.rows[0].n) >= ATTACHMENT_MAX_PER_TASK) {
+            await client.query('ROLLBACK');
+            return res.status(409).json({ error: `Limite de ${ATTACHMENT_MAX_PER_TASK} anexos por tarefa` });
+          }
+          await client.query(
+            `INSERT INTO attachment_uploads
+              (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + $9 * INTERVAL '1 second')`,
+            [attachmentId, req.params.id, taskRow.board_id, req.memberId, filename, storagePath, mimeType, sizeBytes, UPLOAD_CONFIRM_TTL_SEC]
+          );
+          await client.query('COMMIT');
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+        try {
+          const uploadUrl = await blobUploadUrl(storagePath, mimeType, sizeBytes);
+          return res.status(201).json({ attachmentId, uploadUrl, provider: 'vercel_blob' });
+        } catch (error) {
+          await query('DELETE FROM attachment_uploads WHERE id = $1', [attachmentId]);
+          throw error;
+        }
+      }
+
       const countRes = await query(
         'SELECT COUNT(*)::int AS n FROM task_attachments WHERE task_id = $1',
         [req.params.id]
@@ -2823,29 +2876,125 @@ app.post(
         return res.status(415).json({ error: 'Tipo de arquivo não permitido' });
       }
 
+      const existing = await query(
+        `SELECT * FROM task_attachments WHERE id = $1 AND task_id = $2 AND storage_provider = 'vercel_blob'`,
+        [attachmentId, req.params.id]
+      );
+      if (existing.rows.length) {
+        const row = existing.rows[0];
+        if (row.uploader_id !== req.memberId || row.original_name !== filename ||
+            row.mime_type !== mimeType || row.size_bytes !== sizeBytes) {
+          return res.status(409).json({ error: 'Dados do anexo não correspondem ao upload' });
+        }
+        return res.status(200).json({ success: true, attachment: mapDbAttachment(row) });
+      }
+      const pending = await query(
+        'SELECT * FROM attachment_uploads WHERE id = $1 AND task_id = $2',
+        [attachmentId, req.params.id]
+      );
+      if (pending.rows.length) {
+        const upload = pending.rows[0];
+        if (upload.uploader_id !== req.memberId || upload.original_name !== filename ||
+            upload.mime_type !== mimeType || upload.size_bytes !== sizeBytes) {
+          return res.status(403).json({ error: 'Dados do upload não correspondem à solicitação' });
+        }
+        if (new Date(upload.expires_at).getTime() <= Date.now()) {
+          return res.status(410).json({ error: 'Upload expirado' });
+        }
+        const meta = await blobStat(upload.storage_path);
+        if (meta.size !== upload.size_bytes || meta.mimetype !== upload.mime_type) {
+          return res.status(422).json({ error: 'Metadados do arquivo não correspondem ao upload' });
+        }
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          const task = await client.query('SELECT id FROM tasks WHERE id = $1 FOR UPDATE', [req.params.id]);
+          if (!task.rows.length) {
+            await client.query('ROLLBACK');
+            return res.status(404).json({ error: 'Task not found' });
+          }
+          const locked = await client.query(
+            'SELECT * FROM attachment_uploads WHERE id = $1 AND task_id = $2 AND expires_at > NOW() FOR UPDATE',
+            [attachmentId, req.params.id]
+          );
+          if (!locked.rows.length) {
+            const confirmed = await client.query(
+              `SELECT * FROM task_attachments WHERE id = $1 AND task_id = $2 AND uploader_id = $3 AND storage_provider = 'vercel_blob'`,
+              [attachmentId, req.params.id, req.memberId]
+            );
+            await client.query('ROLLBACK');
+            if (confirmed.rows.length) return res.json({ success: true, attachment: mapDbAttachment(confirmed.rows[0]) });
+            return res.status(410).json({ error: 'Upload expirado ou removido' });
+          }
+          const inserted = await client.query(
+            `INSERT INTO task_attachments
+              (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes, storage_provider)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'vercel_blob') RETURNING *`,
+            [upload.id, upload.task_id, upload.board_id, upload.uploader_id, upload.original_name,
+              upload.storage_path, upload.mime_type, upload.size_bytes]
+          );
+          await client.query('DELETE FROM attachment_uploads WHERE id = $1', [attachmentId]);
+          await client.query('COMMIT');
+          return res.status(201).json({ success: true, attachment: mapDbAttachment(inserted.rows[0]) });
+        } catch (error) {
+          await client.query('ROLLBACK');
+          throw error;
+        } finally {
+          client.release();
+        }
+      }
+
       const supabase = getStorage();
       if (!supabase) {
         return res.status(503).json({ error: 'Storage não configurado' });
       }
 
       const storagePath = attachmentPath(taskRow.board_id, req.params.id, attachmentId, filename);
-      const meta = await statObject(storagePath);
-      if (!meta) {
-        return res.status(422).json({ error: 'Arquivo não encontrado no storage' });
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const task = await client.query('SELECT id FROM tasks WHERE id = $1 FOR UPDATE', [req.params.id]);
+        if (!task.rows.length) {
+          await client.query('ROLLBACK');
+          return res.status(404).json({ error: 'Task not found' });
+        }
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`supabase:${storagePath}`]);
+        const meta = await statObject(storagePath);
+        if (!meta) {
+          await client.query('ROLLBACK');
+          return res.status(422).json({ error: 'Arquivo não encontrado no storage' });
+        }
+        if (meta.size !== sizeBytes || meta.mimetype !== mimeType) {
+          await client.query('ROLLBACK');
+          return res.status(422).json({ error: 'Metadados do arquivo não correspondem ao upload' });
+        }
+        const count = await client.query(
+          `SELECT (SELECT COUNT(*) FROM task_attachments WHERE task_id = $1) +
+            (SELECT COUNT(*) FROM attachment_uploads WHERE task_id = $1 AND expires_at > NOW()) AS n`,
+          [req.params.id]
+        );
+        if (Number(count.rows[0].n) >= ATTACHMENT_MAX_PER_TASK) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: `Limite de ${ATTACHMENT_MAX_PER_TASK} anexos por tarefa` });
+        }
+        const insertRes = await client.query(
+          `INSERT INTO task_attachments (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (id) DO NOTHING RETURNING *`,
+          [attachmentId, req.params.id, taskRow.board_id, req.memberId, filename, storagePath, mimeType, sizeBytes]
+        );
+        if (!insertRes.rows.length) {
+          await client.query('ROLLBACK');
+          return res.status(409).json({ error: 'Anexo já confirmado' });
+        }
+        await client.query('COMMIT');
+        return res.status(201).json({ success: true, attachment: mapDbAttachment(insertRes.rows[0]) });
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
       }
-
-      const insertRes = await query(
-        `INSERT INTO task_attachments (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (id) DO NOTHING
-         RETURNING *`,
-        [attachmentId, req.params.id, taskRow.board_id, req.memberId, filename, storagePath, mimeType, sizeBytes]
-      );
-      if (insertRes.rows.length === 0) {
-        return res.status(409).json({ error: 'Anexo já confirmado' });
-      }
-
-      res.status(201).json({ success: true, attachment: mapDbAttachment(insertRes.rows[0]) });
     } catch (error: any) {
       console.error('Error confirming attachment:', error);
       res.status(500).json({ error: error.message });
@@ -2883,6 +3032,12 @@ app.get('/api/tasks/:id/attachments/:attId/url', authenticateToken, async (req, 
     );
     if (attRes.rows.length === 0) return res.status(404).json({ error: 'Anexo não encontrado' });
 
+    if (attRes.rows[0].storage_provider === 'vercel_blob') {
+      if (!blobConfigured()) return res.status(503).json({ error: 'Vercel Blob não configurado' });
+      const url = await blobDownloadUrl(attRes.rows[0].storage_path);
+      return res.json({ url, expiresIn: SIGNED_GET_TTL_SEC });
+    }
+
     const supabase = getStorage();
     if (!supabase) return res.status(503).json({ error: 'Storage não configurado' });
 
@@ -2909,12 +3064,13 @@ app.delete('/api/tasks/:id/attachments/:attId', authenticateToken, async (req, r
     }
 
     const attRes = await query(
-      'DELETE FROM task_attachments WHERE id = $1 AND task_id = $2 RETURNING storage_path',
+      'SELECT storage_path, storage_provider FROM task_attachments WHERE id = $1 AND task_id = $2',
       [req.params.attId, req.params.id]
     );
     if (attRes.rows.length === 0) return res.status(404).json({ error: 'Anexo não encontrado' });
 
-    await removeObject(attRes.rows[0].storage_path);
+    await deleteStoredAttachment(attRes.rows[0].storage_provider, attRes.rows[0].storage_path);
+    await query('DELETE FROM task_attachments WHERE id = $1 AND task_id = $2', [req.params.attId, req.params.id]);
     res.json({ success: true });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -2938,37 +3094,70 @@ app.get('/api/cron/cleanup-attachments', async (req, res) => {
     }
 
     const supabase = getStorage();
-    if (!supabase) return res.status(503).json({ error: 'Storage não configurado' });
+    if (!supabase && !blobConfigured()) return res.status(503).json({ error: 'Storage não configurado' });
+    const blobAvailable = blobConfigured();
 
-    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-    const removed: string[] = [];
-    let scanned = 0;
-
-    const boardsRes = await query('SELECT id FROM boards');
-    for (const board of boardsRes.rows) {
-      const taskDirs = await listObjects(board.id);
-      for (const dir of taskDirs) {
-        if (dir.id !== null) continue; // só pastas (taskId)
-        const files = await listObjects(`${board.id}/${dir.name}`);
-        for (const file of files) {
-          if (file.id === null) continue;
-          const createdAt = file.created_at ? Date.parse(file.created_at) : NaN;
-          if (Number.isNaN(createdAt) || createdAt > cutoff) continue;
-          scanned++;
-          const storagePath = `${board.id}/${dir.name}/${file.name}`;
-          const rowRes = await query(
-            'SELECT 1 FROM task_attachments WHERE storage_path = $1',
-            [storagePath]
-          );
-          if (rowRes.rows.length === 0) {
-            const ok = await removeObject(storagePath);
-            if (ok) removed.push(storagePath);
-          }
+    await query(
+      `DELETE FROM attachment_uploads WHERE id IN
+       (SELECT id FROM attachment_uploads WHERE expires_at < NOW() - INTERVAL '24 hours' LIMIT 100)`
+    );
+    const queued = await query(
+      `SELECT storage_provider, storage_path FROM attachment_cleanup_queue
+       WHERE not_before <= NOW() ORDER BY not_before LIMIT 25`
+    );
+    const cleanupErrors: string[] = [];
+    for (const item of queued.rows) {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          [`${item.storage_provider}:${item.storage_path}`]);
+        const queuedItem = await client.query(
+          `SELECT 1 FROM attachment_cleanup_queue
+           WHERE storage_provider = $1 AND storage_path = $2 FOR UPDATE`,
+          [item.storage_provider, item.storage_path]
+        );
+        if (!queuedItem.rows.length) {
+          await client.query('COMMIT');
+          continue;
         }
+        const referenced = await client.query(
+          `SELECT 1 FROM task_attachments WHERE storage_provider = $1 AND storage_path = $2
+           UNION ALL SELECT 1 FROM attachment_uploads WHERE $1 = 'vercel_blob' AND storage_path = $2 LIMIT 1`,
+          [item.storage_provider, item.storage_path]
+        );
+        if (!referenced.rows.length) {
+          await deleteStoredAttachment(item.storage_provider, item.storage_path);
+        }
+        await client.query('DELETE FROM attachment_cleanup_queue WHERE storage_provider = $1 AND storage_path = $2',
+          [item.storage_provider, item.storage_path]);
+        await client.query('COMMIT');
+      } catch (error) {
+        await client.query('ROLLBACK');
+        console.error('Attachment cleanup failed:', error);
+        cleanupErrors.push(item.storage_provider);
+      } finally {
+        client.release();
       }
     }
-
-    res.json({ success: true, scanned, removed });
+    if (cleanupErrors.length) {
+      return res.status(500).json({ error: 'Falha ao remover anexos pendentes', failed: cleanupErrors.length });
+    }
+    if (supabase) await reconcileAttachmentPage('supabase');
+    if (blobAvailable) await reconcileAttachmentPage('vercel_blob');
+    if (!supabase || !blobAvailable) {
+      const missingProvider = !supabase ? 'supabase' : 'vercel_blob';
+      const outstanding = await query(
+        `SELECT 1 FROM task_attachments WHERE storage_provider = $1
+         UNION ALL SELECT 1 FROM attachment_cleanup_queue WHERE storage_provider = $1
+         UNION ALL SELECT 1 FROM attachment_uploads WHERE $1 = 'vercel_blob' LIMIT 1`,
+        [missingProvider]
+      );
+      if (outstanding.rows.length) {
+        return res.status(503).json({ error: `Storage ${missingProvider} não configurado para anexos existentes` });
+      }
+    }
+    res.json({ success: true, queued: queued.rows.length });
   } catch (error: any) {
     console.error('Cleanup attachments failed:', error);
     res.status(500).json({ error: error.message });

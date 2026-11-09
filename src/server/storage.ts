@@ -1,4 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { del, head, issueSignedToken, presignUrl } from '@vercel/blob';
 
 let client: SupabaseClient | null = null;
 
@@ -21,6 +22,64 @@ export const ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024; // 10 MB (Vercel body é ~
 export const ATTACHMENT_MAX_PER_TASK = 20;
 export const SIGNED_UPLOAD_TTL_SEC = 300; // 5 min
 export const SIGNED_GET_TTL_SEC = 900; // 15 min
+export const UPLOAD_CONFIRM_TTL_SEC = 900; // Inclui tempo para concluir e confirmar o upload.
+
+export type AttachmentStorageProvider = 'supabase' | 'vercel_blob';
+
+export function attachmentStorageProvider(): AttachmentStorageProvider {
+  const provider = process.env.ATTACHMENT_STORAGE_PROVIDER || 'supabase';
+  if (provider !== 'supabase' && provider !== 'vercel_blob') {
+    throw new Error('ATTACHMENT_STORAGE_PROVIDER deve ser supabase ou vercel_blob');
+  }
+  return provider;
+}
+
+export function blobConfigured(): boolean {
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN ||
+    (process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN));
+}
+
+export async function blobUploadUrl(pathname: string, mimeType: string, sizeBytes: number): Promise<string> {
+  const validUntil = Date.now() + SIGNED_UPLOAD_TTL_SEC * 1000;
+  const token = await issueSignedToken({
+    pathname,
+    operations: ['put'],
+    validUntil,
+    allowedContentTypes: [mimeType],
+    maximumSizeInBytes: sizeBytes,
+  });
+  const result = await presignUrl(token, {
+    operation: 'put',
+    pathname,
+    access: 'private',
+    validUntil,
+    allowedContentTypes: [mimeType],
+    maximumSizeInBytes: sizeBytes,
+    allowOverwrite: false,
+    addRandomSuffix: false,
+  });
+  return result.presignedUrl;
+}
+
+export async function blobDownloadUrl(pathname: string): Promise<string> {
+  const validUntil = Date.now() + SIGNED_GET_TTL_SEC * 1000;
+  const token = await issueSignedToken({ pathname, operations: ['get'], validUntil });
+  const result = await presignUrl(token, { operation: 'get', pathname, access: 'private', validUntil });
+  return result.presignedUrl;
+}
+
+export async function blobStat(pathname: string): Promise<{ size: number; mimetype: string }> {
+  const result = await head(pathname);
+  return { size: result.size, mimetype: result.contentType };
+}
+
+export async function deleteStoredAttachment(provider: AttachmentStorageProvider, pathname: string): Promise<void> {
+  if (provider === 'vercel_blob') {
+    await del(pathname);
+  } else if (!(await removeObject(pathname))) {
+    throw new Error('Falha ao remover anexo do Supabase Storage');
+  }
+}
 
 const ALLOWED_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp',
@@ -50,7 +109,8 @@ export async function statObject(
     search: base,
     limit: 100,
   });
-  if (error || !data) return null;
+  if (error) throw error;
+  if (!data) throw new Error('Supabase não retornou os metadados do anexo');
   const found = data.find((f) => f.name === base);
   if (!found) return null;
   return {

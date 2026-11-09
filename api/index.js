@@ -1,9 +1,9 @@
 // server.ts
-import express2 from "express";
+import express3 from "express";
 import path2 from "path";
 import { fileURLToPath as fileURLToPath2 } from "url";
 import fs2 from "fs";
-import crypto4 from "crypto";
+import crypto7 from "crypto";
 import dotenv2 from "dotenv";
 import cookieParser from "cookie-parser";
 
@@ -1418,6 +1418,7 @@ function requireAdmin() {
 
 // src/server/storage.ts
 import { createClient } from "@supabase/supabase-js";
+import { del, head, issueSignedToken, presignUrl } from "@vercel/blob";
 var client = null;
 function getStorage() {
   const url = process.env.SUPABASE_URL;
@@ -1433,7 +1434,57 @@ function storageBucket() {
 }
 var ATTACHMENT_MAX_BYTES = 10 * 1024 * 1024;
 var ATTACHMENT_MAX_PER_TASK = 20;
+var SIGNED_UPLOAD_TTL_SEC = 300;
 var SIGNED_GET_TTL_SEC = 900;
+var UPLOAD_CONFIRM_TTL_SEC = 900;
+function attachmentStorageProvider() {
+  const provider = process.env.ATTACHMENT_STORAGE_PROVIDER || "supabase";
+  if (provider !== "supabase" && provider !== "vercel_blob") {
+    throw new Error("ATTACHMENT_STORAGE_PROVIDER deve ser supabase ou vercel_blob");
+  }
+  return provider;
+}
+function blobConfigured() {
+  return Boolean(process.env.BLOB_READ_WRITE_TOKEN || process.env.BLOB_STORE_ID && process.env.VERCEL_OIDC_TOKEN);
+}
+async function blobUploadUrl(pathname, mimeType, sizeBytes) {
+  const validUntil = Date.now() + SIGNED_UPLOAD_TTL_SEC * 1e3;
+  const token = await issueSignedToken({
+    pathname,
+    operations: ["put"],
+    validUntil,
+    allowedContentTypes: [mimeType],
+    maximumSizeInBytes: sizeBytes
+  });
+  const result = await presignUrl(token, {
+    operation: "put",
+    pathname,
+    access: "private",
+    validUntil,
+    allowedContentTypes: [mimeType],
+    maximumSizeInBytes: sizeBytes,
+    allowOverwrite: false,
+    addRandomSuffix: false
+  });
+  return result.presignedUrl;
+}
+async function blobDownloadUrl(pathname) {
+  const validUntil = Date.now() + SIGNED_GET_TTL_SEC * 1e3;
+  const token = await issueSignedToken({ pathname, operations: ["get"], validUntil });
+  const result = await presignUrl(token, { operation: "get", pathname, access: "private", validUntil });
+  return result.presignedUrl;
+}
+async function blobStat(pathname) {
+  const result = await head(pathname);
+  return { size: result.size, mimetype: result.contentType };
+}
+async function deleteStoredAttachment(provider, pathname) {
+  if (provider === "vercel_blob") {
+    await del(pathname);
+  } else if (!await removeObject(pathname)) {
+    throw new Error("Falha ao remover anexo do Supabase Storage");
+  }
+}
 var ALLOWED_EXTENSIONS = /* @__PURE__ */ new Set([
   "png",
   "jpg",
@@ -1466,7 +1517,8 @@ async function statObject(path3) {
     search: base,
     limit: 100
   });
-  if (error || !data) return null;
+  if (error) throw error;
+  if (!data) throw new Error("Supabase n\xE3o retornou os metadados do anexo");
   const found = data.find((f) => f.name === base);
   if (!found) return null;
   return {
@@ -1480,17 +1532,96 @@ async function removeObject(path3) {
   const { error } = await supabase.storage.from(storageBucket()).remove([path3]);
   return !error;
 }
-async function listObjects(dir) {
+
+// src/server/attachmentReconciliation.ts
+import { list } from "@vercel/blob";
+var PAGE_SIZE = 25;
+var MIN_AGE_MS = 24 * 60 * 60 * 1e3;
+async function queueOrphan(client2, provider, path3, createdAt) {
+  if (!Number.isFinite(createdAt.getTime())) {
+    throw new Error("Storage retornou data inv\xE1lida para um anexo");
+  }
+  if (createdAt.getTime() > Date.now() - MIN_AGE_MS) return;
+  await client2.query(
+    `INSERT INTO attachment_cleanup_queue (storage_provider, storage_path, not_before)
+     SELECT $1, $2, NOW()
+     WHERE NOT EXISTS (SELECT 1 FROM task_attachments WHERE storage_provider = $1 AND storage_path = $2)
+       AND NOT EXISTS (SELECT 1 FROM attachment_uploads WHERE $1 = 'vercel_blob' AND storage_path = $2)
+     ON CONFLICT (storage_provider, storage_path) DO NOTHING`,
+    [provider, path3]
+  );
+}
+async function scanBlob(client2, state) {
+  if (state !== null && typeof state !== "string") throw new Error("Cursor Blob inv\xE1lido");
+  const result = await list({
+    prefix: "task-attachments/",
+    limit: PAGE_SIZE,
+    ...state ? { cursor: state } : {}
+  });
+  for (const blob of result.blobs) {
+    await queueOrphan(client2, "vercel_blob", blob.pathname, blob.uploadedAt);
+  }
+  if (result.hasMore && !result.cursor) throw new Error("Vercel Blob n\xE3o retornou cursor de pagina\xE7\xE3o");
+  return result.hasMore ? result.cursor : null;
+}
+function isDirectoryCursor(value) {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value;
+  return typeof entry.path === "string" && typeof entry.offset === "number" && Number.isInteger(entry.offset) && entry.offset >= 0;
+}
+async function scanSupabase(client2, state) {
+  if (!Array.isArray(state) || !state.every(isDirectoryCursor)) throw new Error("Cursor Supabase inv\xE1lido");
+  const directories = state.length ? [...state] : [{ path: "", offset: 0 }];
+  const current = directories.shift();
   const supabase = getStorage();
-  if (!supabase) return [];
-  const { data, error } = await supabase.storage.from(storageBucket()).list(dir, { limit: 1e3 });
-  if (error || !data) return [];
-  return data.map((f) => ({
-    name: f.name,
-    id: f.id ?? null,
-    created_at: f.created_at ?? void 0,
-    size: f.metadata?.size
-  }));
+  if (!supabase) throw new Error("Supabase Storage n\xE3o configurado");
+  const { data, error } = await supabase.storage.from(storageBucket()).list(current.path, {
+    limit: PAGE_SIZE,
+    offset: current.offset,
+    sortBy: { column: "name", order: "asc" }
+  });
+  if (error) throw error;
+  if (data.length === PAGE_SIZE) {
+    directories.unshift({ path: current.path, offset: current.offset + PAGE_SIZE });
+  }
+  for (const item of data) {
+    const path3 = current.path ? `${current.path}/${item.name}` : item.name;
+    if (item.id === null) {
+      directories.push({ path: path3, offset: 0 });
+    } else {
+      if (!item.created_at) throw new Error("Supabase n\xE3o retornou data de cria\xE7\xE3o de um anexo");
+      await queueOrphan(client2, "supabase", path3, new Date(item.created_at));
+    }
+  }
+  return directories;
+}
+async function reconcileAttachmentPage(provider) {
+  const client2 = await pool.connect();
+  try {
+    await client2.query("BEGIN");
+    await client2.query(
+      `INSERT INTO attachment_cleanup_cursors (storage_provider, state) VALUES ($1, $2::jsonb)
+       ON CONFLICT (storage_provider) DO NOTHING`,
+      [provider, JSON.stringify(provider === "supabase" ? [] : null)]
+    );
+    const result = await client2.query(
+      "SELECT state FROM attachment_cleanup_cursors WHERE storage_provider = $1 FOR UPDATE SKIP LOCKED",
+      [provider]
+    );
+    if (result.rows.length) {
+      const state = provider === "supabase" ? await scanSupabase(client2, result.rows[0].state) : await scanBlob(client2, result.rows[0].state);
+      await client2.query(
+        "UPDATE attachment_cleanup_cursors SET state = $2::jsonb WHERE storage_provider = $1",
+        [provider, JSON.stringify(state)]
+      );
+    }
+    await client2.query("COMMIT");
+  } catch (error) {
+    await client2.query("ROLLBACK");
+    throw error;
+  } finally {
+    client2.release();
+  }
 }
 
 // src/server/email/sender.ts
@@ -1591,6 +1722,10 @@ async function processOutbox(limit = 20) {
       );
       result.sent++;
     } catch (err) {
+      console.error(
+        `Email send failed (${row.id}) [secure=${process.env.SMTP_SECURE} port=${process.env.SMTP_PORT}]:`,
+        err?.message
+      );
       const attempts = (row.attempts || 0) + 1;
       const exhausted = attempts >= MAX_ATTEMPTS;
       await query(
@@ -2733,6 +2868,339 @@ async function notifyVisitorComment(task, visitorName, body) {
   }
 }
 
+// src/server/githubRoutes.ts
+import express2 from "express";
+import crypto6 from "crypto";
+
+// src/server/crypto.ts
+import crypto4 from "crypto";
+var ALGO = "aes-256-gcm";
+var IV_BYTES = 12;
+function encryptionKey() {
+  const raw = process.env.APP_ENCRYPTION_KEY || process.env.JWT_SECRET || "";
+  if (!raw) {
+    throw new Error("APP_ENCRYPTION_KEY (ou JWT_SECRET) n\xE3o definida \u2014 segredos n\xE3o podem ser criptografados");
+  }
+  return crypto4.createHash("sha256").update(raw).digest();
+}
+function encryptSecret(plain) {
+  const iv = crypto4.randomBytes(IV_BYTES);
+  const cipher = crypto4.createCipheriv(ALGO, encryptionKey(), iv);
+  const enc = Buffer.concat([cipher.update(String(plain), "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return [iv.toString("base64url"), tag.toString("base64url"), enc.toString("base64url")].join(":");
+}
+function decryptSecret(payload) {
+  const parts = String(payload || "").split(":");
+  if (parts.length !== 3) throw new Error("Segredo criptografado inv\xE1lido");
+  const [ivB64, tagB64, dataB64] = parts;
+  const decipher = crypto4.createDecipheriv(ALGO, encryptionKey(), Buffer.from(ivB64, "base64url"));
+  decipher.setAuthTag(Buffer.from(tagB64, "base64url"));
+  return Buffer.concat([decipher.update(Buffer.from(dataB64, "base64url")), decipher.final()]).toString("utf8");
+}
+
+// src/server/github.ts
+import crypto5 from "crypto";
+var GITHUB_SIGNATURE_HEADER = "x-hub-signature-256";
+var GITHUB_DELIVERY_HEADER = "x-github-delivery";
+var GITHUB_EVENT_HEADER = "x-github-event";
+function signGitHubPayload(rawBody, secret) {
+  const body = Buffer.isBuffer(rawBody) ? rawBody : Buffer.from(String(rawBody), "utf8");
+  const hmac = crypto5.createHmac("sha256", secret).update(body).digest("hex");
+  return `sha256=${hmac}`;
+}
+function verifyGitHubSignature(rawBody, signature, secret) {
+  if (!signature || !secret) return false;
+  const expected = signGitHubPayload(rawBody, secret);
+  const a = Buffer.from(expected);
+  const b = Buffer.from(String(signature));
+  if (a.length !== b.length) return false;
+  return crypto5.timingSafeEqual(a, b);
+}
+function extractTaskKeys(text) {
+  const out = /* @__PURE__ */ new Set();
+  const re = /#([A-Za-z][A-Za-z0-9]*-\d+)/g;
+  let m;
+  while ((m = re.exec(String(text || ""))) !== null) {
+    out.add(m[1].toUpperCase());
+  }
+  return [...out];
+}
+function extractTaskKeysFromBranch(branch) {
+  const out = /* @__PURE__ */ new Set();
+  const re = /([A-Za-z][A-Za-z0-9]*-\d+)/g;
+  let m;
+  while ((m = re.exec(String(branch || ""))) !== null) {
+    out.add(m[1].toUpperCase());
+  }
+  return [...out];
+}
+function parseGitHubPush(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const repo = payload.repository || {};
+  const fullName = String(repo.full_name || "");
+  const [owner = "", name = ""] = fullName.split("/");
+  const branch = String(payload.ref || "").replace(/^refs\/heads\//, "");
+  const rawCommits = Array.isArray(payload.commits) ? payload.commits : [];
+  const commits = rawCommits.filter((c) => c && (c.id || c.sha)).map((c) => ({
+    sha: String(c.id || c.sha),
+    message: String(c.message || ""),
+    author: String(c.author?.name || c.author?.username || "desconhecido"),
+    authorAvatar: c.author?.avatar_url ? String(c.author.avatar_url) : null,
+    url: String(c.url || ""),
+    branch,
+    committedAt: c.timestamp ? String(c.timestamp) : null
+  }));
+  return { repoFullName: fullName, owner, repo: name, branch, commits };
+}
+function collectReferencedTaskKeys(info) {
+  const keys = /* @__PURE__ */ new Set();
+  for (const c of info.commits) {
+    for (const k of extractTaskKeys(c.message)) keys.add(k);
+  }
+  for (const k of extractTaskKeysFromBranch(info.branch)) keys.add(k);
+  return [...keys];
+}
+function isRepoAllowed(owner, repo, allowed) {
+  if (!owner || !repo) return false;
+  return allowed.some(
+    (r) => String(r.owner).toLowerCase() === owner.toLowerCase() && String(r.repo).toLowerCase() === repo.toLowerCase()
+  );
+}
+
+// src/server/githubRoutes.ts
+var githubRouter = express2.Router();
+async function loadSettings() {
+  const r = await query("SELECT * FROM github_settings WHERE enabled = TRUE");
+  return r.rows;
+}
+githubRouter.get("/github/settings", authenticateToken, requireAdmin(), async (_req, res) => {
+  try {
+    const rows = await loadSettings();
+    res.json({
+      repositories: rows.map((r) => ({
+        id: r.id,
+        owner: r.owner,
+        repo: r.repo,
+        enabled: Boolean(r.enabled),
+        hasSecret: Boolean(r.secret_encrypted)
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+githubRouter.post("/github/settings", authenticateToken, requireAdmin(), async (req, res) => {
+  try {
+    const owner = String(req.body?.owner || "").trim();
+    const repo = String(req.body?.repo || "").trim();
+    const secret = String(req.body?.secret || "");
+    if (!owner || !repo || secret.length < 16) {
+      return res.status(400).json({ error: "Informe owner, repo e um secret com pelo menos 16 caracteres" });
+    }
+    const id = `ghs-${Date.now()}-${crypto6.randomBytes(3).toString("hex")}`;
+    const encrypted = encryptSecret(secret);
+    const r = await query(
+      `INSERT INTO github_settings (id, owner, repo, secret_encrypted, enabled, created_by)
+       VALUES ($1, $2, $3, $4, TRUE, $5)
+       ON CONFLICT (owner, repo)
+       DO UPDATE SET secret_encrypted = EXCLUDED.secret_encrypted, enabled = TRUE, updated_at = NOW()
+       RETURNING id, owner, repo`,
+      [id, owner, repo, encrypted, req.memberId]
+    );
+    res.status(201).json({ id: r.rows[0].id, owner: r.rows[0].owner, repo: r.rows[0].repo, hasSecret: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+githubRouter.delete("/github/settings/:id", authenticateToken, requireAdmin(), async (req, res) => {
+  try {
+    const r = await query("DELETE FROM github_settings WHERE id = $1", [req.params.id]);
+    if (!r.rowCount) return res.status(404).json({ error: "Configura\xE7\xE3o n\xE3o encontrada" });
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+githubRouter.get("/tasks/:id/commits", authenticateToken, async (req, res) => {
+  try {
+    const tRes = await query("SELECT board_id FROM tasks WHERE id = $1", [req.params.id]);
+    if (!tRes.rows.length) return res.status(404).json({ error: "Tarefa n\xE3o encontrada" });
+    const bm = await query(
+      "SELECT 1 FROM board_members WHERE board_id = $1 AND member_id = $2",
+      [tRes.rows[0].board_id, req.memberId]
+    );
+    const isAdmin = await query("SELECT system_role FROM members WHERE id = $1", [req.memberId]);
+    const admin = isAdmin.rows[0]?.system_role === "admin";
+    if (!bm.rowCount && !admin) return res.status(403).json({ error: "Sem acesso a esta tarefa" });
+    const r = await query(
+      `SELECT id, sha, message, author, author_avatar, url, branch, repo_full_name, committed_at, created_at
+       FROM task_commits WHERE task_id = $1 ORDER BY created_at DESC LIMIT 50`,
+      [req.params.id]
+    );
+    res.json({
+      commits: r.rows.map((c) => ({
+        id: c.id,
+        sha: c.sha,
+        message: c.message,
+        author: c.author,
+        authorAvatar: c.author_avatar,
+        url: c.url,
+        branch: c.branch,
+        repo: c.repo_full_name,
+        committedAt: c.committed_at,
+        createdAt: c.created_at
+      }))
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+githubRouter.post("/webhooks/github", async (req, res) => {
+  const rawBody = Buffer.isBuffer(req.rawBody) ? req.rawBody : Buffer.from(JSON.stringify(req.body || {}));
+  try {
+    const event = String(req.headers[GITHUB_EVENT_HEADER] || "");
+    const deliveryId = String(req.headers[GITHUB_DELIVERY_HEADER] || "");
+    const signature = String(req.headers[GITHUB_SIGNATURE_HEADER] || "");
+    if (event !== "push") {
+      return res.status(200).json({ ok: true, ignored: "evento n\xE3o suportado" });
+    }
+    const settings = await loadSettings();
+    let matched = null;
+    for (const s of settings) {
+      let secret = "";
+      try {
+        secret = decryptSecret(s.secret_encrypted);
+      } catch {
+        continue;
+      }
+      if (verifyGitHubSignature(rawBody, signature, secret)) {
+        matched = s;
+        break;
+      }
+    }
+    if (!matched) {
+      return res.status(401).json({ error: "Assinatura inv\xE1lida" });
+    }
+    if (deliveryId) {
+      const ins = await query(
+        "INSERT INTO github_deliveries (delivery_id) VALUES ($1) ON CONFLICT DO NOTHING",
+        [deliveryId]
+      );
+      if (!ins.rowCount) {
+        return res.status(200).json({ ok: true, ignored: "delivery j\xE1 processada" });
+      }
+    }
+    const info = parseGitHubPush(req.body);
+    if (!info) return res.status(200).json({ ok: true, ignored: "payload inv\xE1lido" });
+    if (!isRepoAllowed(info.owner, info.repo, settings)) {
+      return res.status(403).json({ error: "Reposit\xF3rio n\xE3o autorizado" });
+    }
+    const keys = collectReferencedTaskKeys(info);
+    if (!keys.length) {
+      return res.status(200).json({ ok: true, linked: 0, ignored: "nenhuma refer\xEAncia de tarefa" });
+    }
+    const tasksRes = await query("SELECT id, key, title, board_id, assignee_id, assignee_ids FROM tasks WHERE UPPER(key) = ANY($1)", [
+      keys
+    ]);
+    if (!tasksRes.rows.length) {
+      console.warn("GitHub push com refer\xEAncia sem tarefa correspondente:", keys.join(", "));
+      return res.status(200).json({ ok: true, linked: 0, warning: "refer\xEAncia sem tarefa correspondente" });
+    }
+    let linked = 0;
+    for (const task of tasksRes.rows) {
+      for (const commit of info.commits) {
+        const id = `tc-${Date.now()}-${crypto6.randomBytes(3).toString("hex")}`;
+        const ins = await query(
+          `INSERT INTO task_commits
+             (id, task_id, sha, message, author, author_avatar, url, branch, repo_full_name, committed_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+           ON CONFLICT (task_id, sha) DO NOTHING`,
+          [
+            id,
+            task.id,
+            commit.sha,
+            commit.message.slice(0, 500),
+            commit.author,
+            commit.authorAvatar,
+            commit.url,
+            commit.branch,
+            info.repoFullName,
+            commit.committedAt
+          ]
+        );
+        if (ins.rowCount) {
+          linked += 1;
+          await notifyCommit(task, commit).catch(
+            (e) => console.error("notifyCommit falhou:", e?.message || e)
+          );
+        }
+      }
+    }
+    res.status(200).json({ ok: true, linked });
+  } catch (error) {
+    console.error("GitHub webhook failed:", error);
+    res.status(500).json({ error: "Erro ao processar push" });
+  }
+});
+async function notifyCommit(task, commit) {
+  const ids = [];
+  const parsed = typeof task.assignee_ids === "string" ? JSON.parse(task.assignee_ids || "[]") : task.assignee_ids;
+  if (Array.isArray(parsed)) ids.push(...parsed.filter((x) => typeof x === "string" && x));
+  if (task.assignee_id) ids.push(task.assignee_id);
+  const unique = [...new Set(ids)];
+  if (!unique.length) return;
+  const mRes = await query("SELECT id, name, email FROM members WHERE id = ANY($1)", [unique]);
+  const members = mRes.rows.filter((m) => m.email);
+  if (!members.length) return;
+  const shortSha = commit.sha.slice(0, 7);
+  await query(
+    `INSERT INTO activity_logs (id, type, task_id, task_key, task_title, member_id, member_name, details, timestamp)
+     VALUES ($1, 'task_updated', $2, $3, $4, $5, $6, $7, NOW())`,
+    [
+      `act-${Date.now()}-${crypto6.randomBytes(3).toString("hex")}`,
+      task.id,
+      task.key,
+      task.title,
+      members[0].id,
+      members[0].name,
+      `Commit ${shortSha} atrelado \xE0 tarefa`
+    ]
+  );
+  const settingsRes = await query("SELECT * FROM email_settings LIMIT 1");
+  const settings = settingsRes.rows[0];
+  if (!settings?.enabled) return;
+  for (const m of members) {
+    try {
+      await query(
+        `INSERT INTO email_notifications
+           (id, trigger_type, task_id, task_key, task_title, recipient_email, recipient_name,
+            sender_name, subject, content_preview, html_body, status, timestamp, read, member_id, created_at)
+         VALUES ($1, 'github_commit', $2, $3, $4, $5, $6, $7, $8, $9, $10, 'pending', $11, false, $12, now())`,
+        [
+          `em-${Date.now()}-${crypto6.randomBytes(4).toString("hex")}`,
+          task.id,
+          task.key,
+          task.title,
+          m.email,
+          m.name,
+          settings.sender_name || "Brolabs Workflow",
+          `Novo commit em ${task.key}`,
+          `${shortSha}: ${commit.message.slice(0, 200)}`,
+          `<p>Ol\xE1 ${m.name},</p><p>Um commit foi atrelado \xE0 tarefa <strong>${task.key}</strong>:</p><p><code>${shortSha}</code> \u2014 ${commit.message.slice(
+            0,
+            300
+          )}</p>`,
+          (/* @__PURE__ */ new Date()).toISOString(),
+          m.id
+        ]
+      );
+    } catch (e) {
+      console.error("github_commit email enqueue falhou:", e?.message || e);
+    }
+  }
+}
+
 // src/server/taskSummary.ts
 var SUMMARY_MAX_COMMENT_CHARS = 400;
 var SUMMARY_MAX_COMMENTS = 40;
@@ -2778,11 +3246,11 @@ ${perMember}`;
 dotenv2.config();
 var __filename = fileURLToPath2(import.meta.url);
 var __dirname = path2.dirname(__filename);
-var app = express2();
+var app = express3();
 var PORT = 3e3;
 var isProduction = process.env.NODE_ENV === "production";
 var isVercel = Boolean(process.env.VERCEL);
-app.use(express2.json({ limit: "10mb", verify: (req, _res, buf) => {
+app.use(express3.json({ limit: "10mb", verify: (req, _res, buf) => {
   req.rawBody = buf;
 } }));
 app.use(cookieParser());
@@ -2791,7 +3259,7 @@ var avatarsDir = path2.resolve(bucketDir, "avatars");
 if (!isVercel && !fs2.existsSync(avatarsDir)) {
   fs2.mkdirSync(avatarsDir, { recursive: true });
 }
-app.use("/bucket", express2.static(bucketDir));
+app.use("/bucket", express3.static(bucketDir));
 var dbReady = null;
 if (isVercel) {
   app.use("/api", async (req, res, next) => {
@@ -2830,7 +3298,7 @@ app.use((req, res, next) => {
 });
 app.use((req, res, next) => {
   if (!req.path.startsWith("/api")) return next();
-  const requestId = String(req.headers["x-request-id"] || crypto4.randomUUID());
+  const requestId = String(req.headers["x-request-id"] || crypto7.randomUUID());
   const start = Date.now();
   res.header("X-Request-Id", requestId);
   res.on("finish", () => {
@@ -2946,6 +3414,9 @@ function mapDbMember(row) {
     active: Boolean(row.active)
   };
 }
+function mapAuthMember(row) {
+  return { ...mapDbMember(row), system_role: row.system_role };
+}
 function mapDbTask(row) {
   const assigneeIds = normalizeAssigneeIds(
     safeJson3(row.assignee_ids, []),
@@ -3059,7 +3530,8 @@ app.get("/api/health", async (req, res) => {
       totalTasks: parseInt(tasksCount.rows[0].count, 10),
       totalBoards: parseInt(boardsCount.rows[0].count, 10),
       smtp: smtpConfigured() ? "configured" : "unconfigured",
-      storage: getStorage() ? "ok" : "unconfigured",
+      storage: attachmentStorageProvider() === "vercel_blob" ? blobConfigured() ? "ok" : "unconfigured" : getStorage() ? "ok" : "unconfigured",
+      legacyStorage: getStorage() ? "ok" : "unconfigured",
       ai: aiConfigured() ? "configured" : "unconfigured",
       migrations: await migrationsSummary()
     });
@@ -3255,7 +3727,7 @@ app.post("/api/auth/login", validateBody(loginSchema), async (req, res) => {
     }
     await updateLastLogin(memberRow.id);
     const token = generateToken(memberRow.id);
-    const member = mapDbMember(memberRow);
+    const member = mapAuthMember(memberRow);
     res.cookie("token", token, {
       httpOnly: true,
       sameSite: "lax",
@@ -3286,7 +3758,7 @@ app.get("/api/auth/me", authenticateToken, async (req, res) => {
     if (!memberRow) {
       return res.status(404).json({ error: "Membro n\xE3o encontrado" });
     }
-    res.json({ success: true, member: mapDbMember(memberRow) });
+    res.json({ success: true, member: mapAuthMember(memberRow) });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3303,7 +3775,7 @@ async function ensureTagsExist(tags, memberId) {
     await query(
       `INSERT INTO tags (id, name, color, created_by)
        VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-      [`tag-${crypto4.randomUUID().slice(0, 8)}`, name, "#64748b", memberId]
+      [`tag-${crypto7.randomUUID().slice(0, 8)}`, name, "#64748b", memberId]
     );
   }
 }
@@ -3469,14 +3941,14 @@ async function fireTaskUpdateEvents(current, merged, updates) {
           newComments[0]?.authorId || ""
         );
         if (mentioned.length) {
-          const list = mentioned.map((m) => m.name).join(", ");
+          const list2 = mentioned.map((m) => m.name).join(", ");
           dispatchEvent(
             "mention",
             `\u{1F4AC} Em ${merged.key} ("${merged.title}"): {mentions} \u2014 ${taskDeepLink(merged.id)}`,
             {
               taskKey: merged.key,
               title: merged.title,
-              mentioned: list,
+              mentioned: list2,
               link: taskDeepLink(merged.id)
             },
             mentioned
@@ -4062,7 +4534,7 @@ app.post(
     try {
       const { id } = req.params;
       const expiresInDays = req.body.expiresInDays ?? 90;
-      const token = crypto4.randomBytes(32).toString("hex");
+      const token = crypto7.randomBytes(32).toString("hex");
       const r = await query(
         `UPDATE boards
          SET visibility = 'public', share_token = $1,
@@ -4194,6 +4666,7 @@ app.get("/api/public/boards/:token", async (req, res) => {
   }
 });
 app.use("/api", publicTaskRouter);
+app.use("/api", githubRouter);
 async function updateBoardColumnsWithLock(boardId, newColumns, expectedVersion) {
   const res = await query(
     `UPDATE boards SET columns = $1, version = version + 1, updated_at = NOW()
@@ -4460,11 +4933,11 @@ app.get("/api/bucket/avatars", (req, res) => {
       return res.json({ files: [] });
     }
     const files = fs2.readdirSync(avatarsDir).filter((f) => /\.(png|jpe?g|svg|webp|gif)$/i.test(f));
-    const list = files.map((filename) => ({
+    const list2 = files.map((filename) => ({
       filename,
       url: `/bucket/avatars/${filename}`
     }));
-    res.json({ files: list });
+    res.json({ files: list2 });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -4896,12 +5369,12 @@ app.delete("/api/email/notifications", authenticateToken, async (req, res) => {
   try {
     const meRes = await query("SELECT email FROM members WHERE id = $1", [req.memberId]);
     const myEmail = meRes.rows[0]?.email || "";
-    const del = await query(
+    const del2 = await query(
       `DELETE FROM email_notifications
        WHERE member_id = $1 OR LOWER(recipient_email) = LOWER($2)`,
       [req.memberId, myEmail]
     );
-    res.json({ success: true, deleted: del.rowCount });
+    res.json({ success: true, deleted: del2.rowCount });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -4990,7 +5463,7 @@ app.get("/api/cron/process-emails", async (req, res) => {
     if (!secret) return res.status(503).json({ error: "CRON_SECRET n\xE3o configurado" });
     const a = Buffer.from(token);
     const b = Buffer.from(secret);
-    if (a.length !== b.length || !crypto4.timingSafeEqual(a, b)) {
+    if (a.length !== b.length || !crypto7.timingSafeEqual(a, b)) {
       return res.status(401).json({ error: "Token inv\xE1lido" });
     }
     const result = await processOutbox(50);
@@ -5069,6 +5542,50 @@ app.post(
       if (mimeType === "image/svg+xml") {
         return res.status(415).json({ error: "SVG n\xE3o \xE9 permitido (risco de XSS)" });
       }
+      if (attachmentStorageProvider() === "vercel_blob") {
+        if (!blobConfigured()) return res.status(503).json({ error: "Vercel Blob n\xE3o configurado" });
+        if (mimeType.length > 100) return res.status(400).json({ error: "Tipo MIME inv\xE1lido" });
+        const attachmentId2 = `att-${Date.now()}-${crypto7.randomBytes(8).toString("hex")}`;
+        const storagePath2 = `task-attachments/${attachmentId2}.${extensionOf(filename)}`;
+        const client2 = await pool.connect();
+        try {
+          await client2.query("BEGIN");
+          const task = await client2.query("SELECT id FROM tasks WHERE id = $1 FOR UPDATE", [req.params.id]);
+          if (!task.rows.length) {
+            await client2.query("ROLLBACK");
+            return res.status(404).json({ error: "Task not found" });
+          }
+          const count = await client2.query(
+            `SELECT
+              (SELECT COUNT(*) FROM task_attachments WHERE task_id = $1) +
+              (SELECT COUNT(*) FROM attachment_uploads WHERE task_id = $1 AND expires_at > NOW()) AS n`,
+            [req.params.id]
+          );
+          if (Number(count.rows[0].n) >= ATTACHMENT_MAX_PER_TASK) {
+            await client2.query("ROLLBACK");
+            return res.status(409).json({ error: `Limite de ${ATTACHMENT_MAX_PER_TASK} anexos por tarefa` });
+          }
+          await client2.query(
+            `INSERT INTO attachment_uploads
+              (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes, expires_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW() + $9 * INTERVAL '1 second')`,
+            [attachmentId2, req.params.id, taskRow.board_id, req.memberId, filename, storagePath2, mimeType, sizeBytes, UPLOAD_CONFIRM_TTL_SEC]
+          );
+          await client2.query("COMMIT");
+        } catch (error2) {
+          await client2.query("ROLLBACK");
+          throw error2;
+        } finally {
+          client2.release();
+        }
+        try {
+          const uploadUrl = await blobUploadUrl(storagePath2, mimeType, sizeBytes);
+          return res.status(201).json({ attachmentId: attachmentId2, uploadUrl, provider: "vercel_blob" });
+        } catch (error2) {
+          await query("DELETE FROM attachment_uploads WHERE id = $1", [attachmentId2]);
+          throw error2;
+        }
+      }
       const countRes = await query(
         "SELECT COUNT(*)::int AS n FROM task_attachments WHERE task_id = $1",
         [req.params.id]
@@ -5082,7 +5599,7 @@ app.post(
           error: "Storage n\xE3o configurado. Defina SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY no ambiente."
         });
       }
-      const attachmentId = `att-${Date.now()}-${crypto4.randomBytes(4).toString("hex")}`;
+      const attachmentId = `att-${Date.now()}-${crypto7.randomBytes(4).toString("hex")}`;
       const storagePath = attachmentPath(taskRow.board_id, req.params.id, attachmentId, filename);
       const { data, error } = await supabase.storage.from(storageBucket()).createSignedUploadUrl(storagePath);
       if (error || !data) {
@@ -5119,26 +5636,129 @@ app.post(
       if (!isAllowedExtension(filename) || mimeType === "image/svg+xml") {
         return res.status(415).json({ error: "Tipo de arquivo n\xE3o permitido" });
       }
+      const existing = await query(
+        `SELECT * FROM task_attachments WHERE id = $1 AND task_id = $2 AND storage_provider = 'vercel_blob'`,
+        [attachmentId, req.params.id]
+      );
+      if (existing.rows.length) {
+        const row = existing.rows[0];
+        if (row.uploader_id !== req.memberId || row.original_name !== filename || row.mime_type !== mimeType || row.size_bytes !== sizeBytes) {
+          return res.status(409).json({ error: "Dados do anexo n\xE3o correspondem ao upload" });
+        }
+        return res.status(200).json({ success: true, attachment: mapDbAttachment(row) });
+      }
+      const pending = await query(
+        "SELECT * FROM attachment_uploads WHERE id = $1 AND task_id = $2",
+        [attachmentId, req.params.id]
+      );
+      if (pending.rows.length) {
+        const upload = pending.rows[0];
+        if (upload.uploader_id !== req.memberId || upload.original_name !== filename || upload.mime_type !== mimeType || upload.size_bytes !== sizeBytes) {
+          return res.status(403).json({ error: "Dados do upload n\xE3o correspondem \xE0 solicita\xE7\xE3o" });
+        }
+        if (new Date(upload.expires_at).getTime() <= Date.now()) {
+          return res.status(410).json({ error: "Upload expirado" });
+        }
+        const meta = await blobStat(upload.storage_path);
+        if (meta.size !== upload.size_bytes || meta.mimetype !== upload.mime_type) {
+          return res.status(422).json({ error: "Metadados do arquivo n\xE3o correspondem ao upload" });
+        }
+        const client3 = await pool.connect();
+        try {
+          await client3.query("BEGIN");
+          const task = await client3.query("SELECT id FROM tasks WHERE id = $1 FOR UPDATE", [req.params.id]);
+          if (!task.rows.length) {
+            await client3.query("ROLLBACK");
+            return res.status(404).json({ error: "Task not found" });
+          }
+          const locked = await client3.query(
+            "SELECT * FROM attachment_uploads WHERE id = $1 AND task_id = $2 AND expires_at > NOW() FOR UPDATE",
+            [attachmentId, req.params.id]
+          );
+          if (!locked.rows.length) {
+            const confirmed = await client3.query(
+              `SELECT * FROM task_attachments WHERE id = $1 AND task_id = $2 AND uploader_id = $3 AND storage_provider = 'vercel_blob'`,
+              [attachmentId, req.params.id, req.memberId]
+            );
+            await client3.query("ROLLBACK");
+            if (confirmed.rows.length) return res.json({ success: true, attachment: mapDbAttachment(confirmed.rows[0]) });
+            return res.status(410).json({ error: "Upload expirado ou removido" });
+          }
+          const inserted = await client3.query(
+            `INSERT INTO task_attachments
+              (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes, storage_provider)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'vercel_blob') RETURNING *`,
+            [
+              upload.id,
+              upload.task_id,
+              upload.board_id,
+              upload.uploader_id,
+              upload.original_name,
+              upload.storage_path,
+              upload.mime_type,
+              upload.size_bytes
+            ]
+          );
+          await client3.query("DELETE FROM attachment_uploads WHERE id = $1", [attachmentId]);
+          await client3.query("COMMIT");
+          return res.status(201).json({ success: true, attachment: mapDbAttachment(inserted.rows[0]) });
+        } catch (error) {
+          await client3.query("ROLLBACK");
+          throw error;
+        } finally {
+          client3.release();
+        }
+      }
       const supabase = getStorage();
       if (!supabase) {
         return res.status(503).json({ error: "Storage n\xE3o configurado" });
       }
       const storagePath = attachmentPath(taskRow.board_id, req.params.id, attachmentId, filename);
-      const meta = await statObject(storagePath);
-      if (!meta) {
-        return res.status(422).json({ error: "Arquivo n\xE3o encontrado no storage" });
+      const client2 = await pool.connect();
+      try {
+        await client2.query("BEGIN");
+        const task = await client2.query("SELECT id FROM tasks WHERE id = $1 FOR UPDATE", [req.params.id]);
+        if (!task.rows.length) {
+          await client2.query("ROLLBACK");
+          return res.status(404).json({ error: "Task not found" });
+        }
+        await client2.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [`supabase:${storagePath}`]);
+        const meta = await statObject(storagePath);
+        if (!meta) {
+          await client2.query("ROLLBACK");
+          return res.status(422).json({ error: "Arquivo n\xE3o encontrado no storage" });
+        }
+        if (meta.size !== sizeBytes || meta.mimetype !== mimeType) {
+          await client2.query("ROLLBACK");
+          return res.status(422).json({ error: "Metadados do arquivo n\xE3o correspondem ao upload" });
+        }
+        const count = await client2.query(
+          `SELECT (SELECT COUNT(*) FROM task_attachments WHERE task_id = $1) +
+            (SELECT COUNT(*) FROM attachment_uploads WHERE task_id = $1 AND expires_at > NOW()) AS n`,
+          [req.params.id]
+        );
+        if (Number(count.rows[0].n) >= ATTACHMENT_MAX_PER_TASK) {
+          await client2.query("ROLLBACK");
+          return res.status(409).json({ error: `Limite de ${ATTACHMENT_MAX_PER_TASK} anexos por tarefa` });
+        }
+        const insertRes = await client2.query(
+          `INSERT INTO task_attachments (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+           ON CONFLICT (id) DO NOTHING RETURNING *`,
+          [attachmentId, req.params.id, taskRow.board_id, req.memberId, filename, storagePath, mimeType, sizeBytes]
+        );
+        if (!insertRes.rows.length) {
+          await client2.query("ROLLBACK");
+          return res.status(409).json({ error: "Anexo j\xE1 confirmado" });
+        }
+        await client2.query("COMMIT");
+        return res.status(201).json({ success: true, attachment: mapDbAttachment(insertRes.rows[0]) });
+      } catch (error) {
+        await client2.query("ROLLBACK");
+        throw error;
+      } finally {
+        client2.release();
       }
-      const insertRes = await query(
-        `INSERT INTO task_attachments (id, task_id, board_id, uploader_id, original_name, storage_path, mime_type, size_bytes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (id) DO NOTHING
-         RETURNING *`,
-        [attachmentId, req.params.id, taskRow.board_id, req.memberId, filename, storagePath, mimeType, sizeBytes]
-      );
-      if (insertRes.rows.length === 0) {
-        return res.status(409).json({ error: "Anexo j\xE1 confirmado" });
-      }
-      res.status(201).json({ success: true, attachment: mapDbAttachment(insertRes.rows[0]) });
     } catch (error) {
       console.error("Error confirming attachment:", error);
       res.status(500).json({ error: error.message });
@@ -5171,6 +5791,11 @@ app.get("/api/tasks/:id/attachments/:attId/url", authenticateToken, async (req, 
       [req.params.attId, req.params.id]
     );
     if (attRes.rows.length === 0) return res.status(404).json({ error: "Anexo n\xE3o encontrado" });
+    if (attRes.rows[0].storage_provider === "vercel_blob") {
+      if (!blobConfigured()) return res.status(503).json({ error: "Vercel Blob n\xE3o configurado" });
+      const url = await blobDownloadUrl(attRes.rows[0].storage_path);
+      return res.json({ url, expiresIn: SIGNED_GET_TTL_SEC });
+    }
     const supabase = getStorage();
     if (!supabase) return res.status(503).json({ error: "Storage n\xE3o configurado" });
     const { data, error } = await supabase.storage.from(storageBucket()).createSignedUrl(attRes.rows[0].storage_path, SIGNED_GET_TTL_SEC);
@@ -5192,11 +5817,12 @@ app.delete("/api/tasks/:id/attachments/:attId", authenticateToken, async (req, r
       return res.status(403).json({ error: "Sem permiss\xE3o para esta a\xE7\xE3o", required: "canEditTask" });
     }
     const attRes = await query(
-      "DELETE FROM task_attachments WHERE id = $1 AND task_id = $2 RETURNING storage_path",
+      "SELECT storage_path, storage_provider FROM task_attachments WHERE id = $1 AND task_id = $2",
       [req.params.attId, req.params.id]
     );
     if (attRes.rows.length === 0) return res.status(404).json({ error: "Anexo n\xE3o encontrado" });
-    await removeObject(attRes.rows[0].storage_path);
+    await deleteStoredAttachment(attRes.rows[0].storage_provider, attRes.rows[0].storage_path);
+    await query("DELETE FROM task_attachments WHERE id = $1 AND task_id = $2", [req.params.attId, req.params.id]);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -5212,38 +5838,77 @@ app.get("/api/cron/cleanup-attachments", async (req, res) => {
     }
     const a = Buffer.from(token);
     const b = Buffer.from(secret);
-    if (a.length !== b.length || !crypto4.timingSafeEqual(a, b)) {
+    if (a.length !== b.length || !crypto7.timingSafeEqual(a, b)) {
       return res.status(401).json({ error: "Token inv\xE1lido" });
     }
     const supabase = getStorage();
-    if (!supabase) return res.status(503).json({ error: "Storage n\xE3o configurado" });
-    const cutoff = Date.now() - 24 * 60 * 60 * 1e3;
-    const removed = [];
-    let scanned = 0;
-    const boardsRes = await query("SELECT id FROM boards");
-    for (const board of boardsRes.rows) {
-      const taskDirs = await listObjects(board.id);
-      for (const dir of taskDirs) {
-        if (dir.id !== null) continue;
-        const files = await listObjects(`${board.id}/${dir.name}`);
-        for (const file of files) {
-          if (file.id === null) continue;
-          const createdAt = file.created_at ? Date.parse(file.created_at) : NaN;
-          if (Number.isNaN(createdAt) || createdAt > cutoff) continue;
-          scanned++;
-          const storagePath = `${board.id}/${dir.name}/${file.name}`;
-          const rowRes = await query(
-            "SELECT 1 FROM task_attachments WHERE storage_path = $1",
-            [storagePath]
-          );
-          if (rowRes.rows.length === 0) {
-            const ok = await removeObject(storagePath);
-            if (ok) removed.push(storagePath);
-          }
+    if (!supabase && !blobConfigured()) return res.status(503).json({ error: "Storage n\xE3o configurado" });
+    const blobAvailable = blobConfigured();
+    await query(
+      `DELETE FROM attachment_uploads WHERE id IN
+       (SELECT id FROM attachment_uploads WHERE expires_at < NOW() - INTERVAL '24 hours' LIMIT 100)`
+    );
+    const queued = await query(
+      `SELECT storage_provider, storage_path FROM attachment_cleanup_queue
+       WHERE not_before <= NOW() ORDER BY not_before LIMIT 25`
+    );
+    const cleanupErrors = [];
+    for (const item of queued.rows) {
+      const client2 = await pool.connect();
+      try {
+        await client2.query("BEGIN");
+        await client2.query(
+          "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+          [`${item.storage_provider}:${item.storage_path}`]
+        );
+        const queuedItem = await client2.query(
+          `SELECT 1 FROM attachment_cleanup_queue
+           WHERE storage_provider = $1 AND storage_path = $2 FOR UPDATE`,
+          [item.storage_provider, item.storage_path]
+        );
+        if (!queuedItem.rows.length) {
+          await client2.query("COMMIT");
+          continue;
         }
+        const referenced = await client2.query(
+          `SELECT 1 FROM task_attachments WHERE storage_provider = $1 AND storage_path = $2
+           UNION ALL SELECT 1 FROM attachment_uploads WHERE $1 = 'vercel_blob' AND storage_path = $2 LIMIT 1`,
+          [item.storage_provider, item.storage_path]
+        );
+        if (!referenced.rows.length) {
+          await deleteStoredAttachment(item.storage_provider, item.storage_path);
+        }
+        await client2.query(
+          "DELETE FROM attachment_cleanup_queue WHERE storage_provider = $1 AND storage_path = $2",
+          [item.storage_provider, item.storage_path]
+        );
+        await client2.query("COMMIT");
+      } catch (error) {
+        await client2.query("ROLLBACK");
+        console.error("Attachment cleanup failed:", error);
+        cleanupErrors.push(item.storage_provider);
+      } finally {
+        client2.release();
       }
     }
-    res.json({ success: true, scanned, removed });
+    if (cleanupErrors.length) {
+      return res.status(500).json({ error: "Falha ao remover anexos pendentes", failed: cleanupErrors.length });
+    }
+    if (supabase) await reconcileAttachmentPage("supabase");
+    if (blobAvailable) await reconcileAttachmentPage("vercel_blob");
+    if (!supabase || !blobAvailable) {
+      const missingProvider = !supabase ? "supabase" : "vercel_blob";
+      const outstanding = await query(
+        `SELECT 1 FROM task_attachments WHERE storage_provider = $1
+         UNION ALL SELECT 1 FROM attachment_cleanup_queue WHERE storage_provider = $1
+         UNION ALL SELECT 1 FROM attachment_uploads WHERE $1 = 'vercel_blob' LIMIT 1`,
+        [missingProvider]
+      );
+      if (outstanding.rows.length) {
+        return res.status(503).json({ error: `Storage ${missingProvider} n\xE3o configurado para anexos existentes` });
+      }
+    }
+    res.json({ success: true, queued: queued.rows.length });
   } catch (error) {
     console.error("Cleanup attachments failed:", error);
     res.status(500).json({ error: error.message });
@@ -5514,7 +6179,7 @@ app.post("/api/todos", authenticateToken, validateBody(todoCreateSchema), async 
       `SELECT COALESCE(MAX(position), -1) + 1 AS p FROM daily_todos WHERE member_id = $1 AND due_date = $2::date`,
       [req.memberId, targetDate]
     );
-    const id = `todo-${crypto4.randomUUID().slice(0, 8)}`;
+    const id = `todo-${crypto7.randomUUID().slice(0, 8)}`;
     const r = await query(
       `INSERT INTO daily_todos (id, member_id, board_id, title, due_date, source_task_id, position)
        VALUES ($1, $2, $3, $4, $5::date, $6, $7) RETURNING *`,
@@ -5603,7 +6268,7 @@ app.post("/api/todos/from-task/:taskId", authenticateToken, async (req, res) => 
       [req.memberId, today]
     );
     const due = t.due_date ? String(t.due_date).slice(0, 10) : today;
-    const id = `todo-${crypto4.randomUUID().slice(0, 8)}`;
+    const id = `todo-${crypto7.randomUUID().slice(0, 8)}`;
     const r = await query(
       `INSERT INTO daily_todos (id, member_id, board_id, title, due_date, source_task_id, position)
        VALUES ($1, $2, $3, $4, $5::date, $6, $7) RETURNING *`,
@@ -5660,7 +6325,7 @@ app.post("/api/notes", authenticateToken, validateBody(noteCreateSchema), async 
     const eff = await resolvePermissions(req.memberId, boardId);
     if (!eff) return res.status(403).json({ error: "Sem acesso a este quadro" });
     if (eff.role === "viewer") return res.status(403).json({ error: "Sem permiss\xE3o para criar notas" });
-    const id = `note-${crypto4.randomUUID().slice(0, 8)}`;
+    const id = `note-${crypto7.randomUUID().slice(0, 8)}`;
     const r = await query(
       `INSERT INTO notes (id, board_id, member_id, title, content)
        VALUES ($1, $2, $3, $4, $5) RETURNING *`,
@@ -5828,7 +6493,7 @@ N\xE3o invente dados. Use apenas o contexto.
 ${context}
 <<<END>>>`;
     const output = await runAi(prompt);
-    const id = `note-${crypto4.randomUUID().slice(0, 8)}`;
+    const id = `note-${crypto7.randomUUID().slice(0, 8)}`;
     const r = await query(
       `INSERT INTO notes (id, board_id, member_id, title, content, ai_generated)
        VALUES ($1, $2, $3, $4, $5, true) RETURNING *`,
@@ -5915,7 +6580,7 @@ app.post("/api/tags", authenticateToken, validateBody(tagCreateSchema), async (r
     if (existing.rows.length > 0) {
       return res.status(409).json({ error: "Etiqueta j\xE1 existe com esse nome", tag: mapTag(existing.rows[0], 0) });
     }
-    const id = `tag-${crypto4.randomUUID().slice(0, 8)}`;
+    const id = `tag-${crypto7.randomUUID().slice(0, 8)}`;
     const r = await query(
       "INSERT INTO tags (id, name, color, created_by) VALUES ($1, $2, $3, $4) RETURNING *",
       [id, name, color || "#64748b", req.memberId]
@@ -6066,7 +6731,7 @@ async function startServer() {
       console.log("\u26A1 Vite development middlewares mounted");
     } else {
       const distPath = path2.resolve(__dirname, "dist");
-      app.use(express2.static(distPath));
+      app.use(express3.static(distPath));
       app.get("*", (req, res) => {
         res.sendFile(path2.resolve(distPath, "index.html"));
       });
