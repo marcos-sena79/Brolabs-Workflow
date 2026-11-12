@@ -28,6 +28,7 @@ import {
   CheckCircle2,
   ExternalLink,
   Archive,
+  ArrowRightLeft,
   Sparkles,
   RefreshCw,
   Globe,
@@ -44,12 +45,14 @@ import {
   formatRelativeTime,
   getPriorityLabel,
   getIssueTypeLabel,
+  getTodoColumnId,
   isTaskDone,
 } from '../utils/agileHelpers';
 import { taskAssigneeIds } from '../utils/taskAssignees';
 
 export const TaskModal: React.FC = () => {
   const {
+    boards,
     tasks,
     selectedTaskModalId,
     setSelectedTaskModalId,
@@ -58,6 +61,7 @@ export const TaskModal: React.FC = () => {
     currentUser,
     updateTask,
     moveTask,
+    moveTaskToBoard,
     deleteTask,
     addSubtask,
     toggleSubtask,
@@ -130,8 +134,24 @@ export const TaskModal: React.FC = () => {
   // Commits do GitHub (S4, item 4)
   const [taskCommits, setTaskCommits] = useState<TaskCommit[]>([]);
   const [commitsLoading, setCommitsLoading] = useState(false);
+  const [targetBoardId, setTargetBoardId] = useState('');
+  const [targetStatusId, setTargetStatusId] = useState('');
+  const [isMovingBoard, setIsMovingBoard] = useState(false);
+  const [moveError, setMoveError] = useState<string | null>(null);
+  const [moveNotice, setMoveNotice] = useState<string | null>(null);
 
   const canManageBoard = can('canManageBoard', task?.boardId);
+  const destinationBoards = boards.filter(
+    (board) => board.id !== task?.boardId && can('canCreateTask', board.id)
+  );
+  const targetBoard = boards.find((board) => board.id === targetBoardId);
+
+  useEffect(() => {
+    setTargetBoardId('');
+    setTargetStatusId('');
+    setMoveError(null);
+    setMoveNotice(null);
+  }, [task?.id]);
 
   useEffect(() => {
     if (!task || !canManageBoard) {
@@ -319,6 +339,38 @@ export const TaskModal: React.FC = () => {
     navigator.clipboard.writeText(task.key);
     setCopiedKey(true);
     setTimeout(() => setCopiedKey(false), 2000);
+  };
+
+  const handleTargetBoardChange = (boardId: string) => {
+    const board = boards.find((candidate) => candidate.id === boardId);
+    setTargetBoardId(boardId);
+    const defaultStatusId = board ? getTodoColumnId(board) : '';
+    setTargetStatusId(
+      board?.columns.some((column) => column.id === defaultStatusId)
+        ? defaultStatusId
+        : board?.columns[0]?.id || ''
+    );
+    setMoveError(null);
+    setMoveNotice(null);
+  };
+
+  const handleMoveTaskSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!targetBoardId || !targetStatusId) return;
+    setIsMovingBoard(true);
+    setMoveError(null);
+    setMoveNotice(null);
+    try {
+      const movedTask = await moveTaskToBoard(task.id, targetBoardId, targetStatusId);
+      const movedBoard = boards.find((board) => board.id === targetBoardId);
+      setTargetBoardId('');
+      setTargetStatusId('');
+      setMoveNotice(`Card movido para ${movedBoard?.name || 'o board de destino'} como ${movedTask.key}.`);
+    } catch (error) {
+      setMoveError(error instanceof Error ? error.message : 'Falha ao mover o card.');
+    } finally {
+      setIsMovingBoard(false);
+    }
   };
 
   const handleAddSubtaskSubmit = (e: React.FormEvent) => {
@@ -570,6 +622,59 @@ export const TaskModal: React.FC = () => {
             </button>
           </div>
         </div>
+
+        {can('canEditTask', task.boardId) && destinationBoards.length > 0 && (
+          <form
+            onSubmit={handleMoveTaskSubmit}
+            className="px-3 sm:px-6 py-3 border-b border-slate-200 dark:border-slate-800 bg-indigo-50/50 dark:bg-indigo-950/20 flex flex-wrap items-end gap-2"
+          >
+            <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+              <span className="flex items-center gap-1">
+                <ArrowRightLeft className="w-3.5 h-3.5" /> Mover card para outro board
+              </span>
+              <select
+                aria-label="Board de destino"
+                value={targetBoardId}
+                onChange={(e) => handleTargetBoardChange(e.target.value)}
+                className="min-w-44 text-xs px-2.5 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
+              >
+                <option value="">Selecione um board</option>
+                {destinationBoards.map((board) => (
+                  <option key={board.id} value={board.id}>
+                    {board.name} ({board.key})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+              Coluna de destino
+              <select
+                aria-label="Coluna de destino"
+                value={targetStatusId}
+                onChange={(e) => setTargetStatusId(e.target.value)}
+                disabled={!targetBoard}
+                className="min-w-36 text-xs px-2.5 py-1.5 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 disabled:opacity-50"
+              >
+                <option value="">Selecione uma coluna</option>
+                {targetBoard?.columns.map((column) => (
+                  <option key={column.id} value={column.id}>
+                    {column.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="submit"
+              disabled={isMovingBoard || !targetBoardId || !targetStatusId}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md font-semibold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {isMovingBoard ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <ArrowRightLeft className="w-3.5 h-3.5" />}
+              {isMovingBoard ? 'Movendo…' : 'Mover'}
+            </button>
+            {moveError && <p role="alert" className="basis-full text-xs text-rose-600 dark:text-rose-400">{moveError}</p>}
+            {moveNotice && <p role="status" className="basis-full text-xs text-emerald-700 dark:text-emerald-400">{moveNotice}</p>}
+          </form>
+        )}
 
         {/* Modal Body - 2 Columns (Content Left 65%, Sidebar Right 35%) */}
         <div className="flex-1 overflow-y-auto grid grid-cols-1 lg:grid-cols-12 divide-y lg:divide-y-0 lg:divide-x divide-slate-200 dark:divide-slate-800">

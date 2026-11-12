@@ -1166,6 +1166,10 @@ var taskUpdateSchema = z.object({
   assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
   parentId: z.string().trim().min(1).max(100).nullable().optional()
 }).passthrough();
+var taskMoveSchema = z.object({
+  boardId: idSchema,
+  statusId: idSchema
+});
 var integrationUpdateSchema = z.object({
   name: z.string().trim().min(1).max(100).optional(),
   enabled: z.boolean().optional(),
@@ -1632,6 +1636,35 @@ async function reconcileAttachmentPage(provider) {
   } finally {
     client2.release();
   }
+}
+
+// src/server/taskMigration.ts
+function nextTaskKey(boardKey, existingTaskKeys) {
+  const prefix = boardKey || "TSK";
+  const existingKeys = new Set(existingTaskKeys);
+  const highestNumber = existingTaskKeys.reduce((highest, taskKey) => {
+    if (!taskKey.startsWith(`${prefix}-`)) return highest;
+    const suffix = taskKey.slice(prefix.length + 1);
+    if (!/^\d+$/.test(suffix)) return highest;
+    return Math.max(highest, Number(suffix));
+  }, 100);
+  let nextNumber = highestNumber + 1;
+  let key = `${prefix}-${nextNumber}`;
+  while (existingKeys.has(key)) {
+    nextNumber += 1;
+    key = `${prefix}-${nextNumber}`;
+  }
+  return key;
+}
+function migratedTaskRelations(task, sourceBoard, targetBoard, parentExistsOnTarget) {
+  const sourceEpic = sourceBoard.epics.find((epic) => epic.id === task.epicId);
+  const targetEpic = sourceEpic ? targetBoard.epics.find(
+    (epic) => epic.name.trim().toLocaleLowerCase() === sourceEpic.name.trim().toLocaleLowerCase()
+  ) : void 0;
+  return {
+    epicId: targetEpic?.id ?? null,
+    parentId: task.parentId && parentExistsOnTarget ? task.parentId : null
+  };
 }
 
 // src/server/email/sender.ts
@@ -4030,6 +4063,100 @@ app.post("/api/tasks", authenticateToken, requireBoardPermission("canCreateTask"
   } catch (error) {
     console.error("Error creating task:", error);
     res.status(500).json({ error: error.message });
+  }
+});
+app.post("/api/tasks/:id/move", authenticateToken, validateBody(taskMoveSchema), async (req, res) => {
+  const { id } = req.params;
+  const { boardId: targetBoardId, statusId: targetStatusId } = req.body;
+  let client2;
+  let transactionStarted = false;
+  try {
+    const existingRes = await query("SELECT * FROM tasks WHERE id = $1", [id]);
+    if (!existingRes.rows.length) return res.status(404).json({ error: "Tarefa n\xE3o encontrada" });
+    const current = mapDbTask(existingRes.rows[0]);
+    if (current.boardId === targetBoardId) {
+      return res.status(400).json({ error: "O board de destino deve ser diferente do board atual" });
+    }
+    const sourcePermissions = await resolvePermissions(req.memberId, current.boardId);
+    if (!sourcePermissions) return res.status(403).json({ error: "Sem acesso ao board de origem" });
+    if (!sourcePermissions.canEditTask) {
+      return res.status(403).json({ error: "Sem permiss\xE3o para mover esta tarefa", required: "canEditTask" });
+    }
+    const targetPermissions = await resolvePermissions(req.memberId, targetBoardId);
+    if (!targetPermissions) return res.status(403).json({ error: "Sem acesso ao board de destino" });
+    if (!targetPermissions.canCreateTask) {
+      return res.status(403).json({ error: "Sem permiss\xE3o para criar tarefas no board de destino", required: "canCreateTask" });
+    }
+    client2 = await pool.connect();
+    await client2.query("BEGIN");
+    transactionStarted = true;
+    const lockedTaskRes = await client2.query("SELECT * FROM tasks WHERE id = $1 FOR UPDATE", [id]);
+    if (!lockedTaskRes.rows.length) {
+      await client2.query("ROLLBACK");
+      transactionStarted = false;
+      return res.status(404).json({ error: "Tarefa n\xE3o encontrada" });
+    }
+    const lockedTask = mapDbTask(lockedTaskRes.rows[0]);
+    if (lockedTask.boardId !== current.boardId) {
+      await client2.query("ROLLBACK");
+      transactionStarted = false;
+      return res.status(409).json({ error: "A tarefa foi movida por outra pessoa. Atualize o board e tente novamente." });
+    }
+    const sourceBoardRes = await client2.query(
+      "SELECT id, key, name, columns, epics FROM boards WHERE id = $1",
+      [current.boardId]
+    );
+    const targetBoardRes = await client2.query(
+      "SELECT id, key, name, columns, epics FROM boards WHERE id = $1 FOR UPDATE",
+      [targetBoardId]
+    );
+    if (!targetBoardRes.rows.length) {
+      await client2.query("ROLLBACK");
+      transactionStarted = false;
+      return res.status(404).json({ error: "Board de destino n\xE3o encontrado" });
+    }
+    if (!sourceBoardRes.rows.length) {
+      await client2.query("ROLLBACK");
+      transactionStarted = false;
+      return res.status(404).json({ error: "Board de origem n\xE3o encontrado" });
+    }
+    const sourceBoard = mapDbBoard(sourceBoardRes.rows[0]);
+    const targetBoard = mapDbBoard(targetBoardRes.rows[0]);
+    if (!targetBoard.columns.some((column) => column.id === targetStatusId)) {
+      await client2.query("ROLLBACK");
+      transactionStarted = false;
+      return res.status(400).json({ error: "A coluna selecionada n\xE3o pertence ao board de destino" });
+    }
+    const targetKeysRes = await client2.query("SELECT key FROM tasks WHERE board_id = $1", [targetBoardId]);
+    const newKey = nextTaskKey(
+      targetBoard.key,
+      targetKeysRes.rows.map((row) => String(row.key || ""))
+    );
+    const parentExists = lockedTask.parentId ? Boolean(
+      (await client2.query("SELECT 1 FROM tasks WHERE id = $1 AND board_id = $2", [
+        lockedTask.parentId,
+        targetBoardId
+      ])).rows.length
+    ) : false;
+    const relations = migratedTaskRelations(lockedTask, sourceBoard, targetBoard, parentExists);
+    const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const updatedRes = await client2.query(
+      `UPDATE tasks
+       SET board_id = $1, key = $2, status_id = $3, epic_id = $4, parent_id = $5, updated_at = $6
+       WHERE id = $7
+       RETURNING *`,
+      [targetBoardId, newKey, targetStatusId, relations.epicId, relations.parentId, updatedAt, id]
+    );
+    await client2.query("UPDATE task_attachments SET board_id = $1 WHERE task_id = $2", [targetBoardId, id]);
+    await client2.query("COMMIT");
+    transactionStarted = false;
+    return res.json({ success: true, task: mapDbTask(updatedRes.rows[0]) });
+  } catch (error) {
+    if (transactionStarted && client2) await client2.query("ROLLBACK");
+    console.error("Error moving task between boards:", error);
+    return res.status(500).json({ error: error.message || "Falha ao mover tarefa entre boards" });
+  } finally {
+    client2?.release();
   }
 });
 app.put("/api/tasks/:id", authenticateToken, validateBody(taskUpdateSchema), async (req, res) => {

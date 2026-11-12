@@ -6,6 +6,7 @@ import {
   shareCreateSchema,
   tagCreateSchema,
   tagUpdateSchema,
+  taskMoveSchema,
   todoCreateSchema,
 } from '../src/server/validation';
 
@@ -77,6 +78,14 @@ describe('todoCreateSchema', () => {
   });
   it('rejeita data fora do intervalo ±2 anos', () => {
     expect(todoCreateSchema.safeParse({ title: 't', dueDate: '1999-01-01' }).success).toBe(false);
+  });
+});
+
+describe('taskMoveSchema', () => {
+  it('requires a target board and status', () => {
+    expect(taskMoveSchema.safeParse({ boardId: 'board-2', statusId: 'todo-2' }).success).toBe(true);
+    expect(taskMoveSchema.safeParse({ boardId: 'board-2' }).success).toBe(false);
+    expect(taskMoveSchema.safeParse({ boardId: '', statusId: 'todo-2' }).success).toBe(false);
   });
 });
 

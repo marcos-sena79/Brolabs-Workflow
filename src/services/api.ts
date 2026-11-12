@@ -143,6 +143,20 @@ export const api = {
     return data.task;
   },
 
+  async moveTaskToBoard(id: string, boardId: string, statusId: string): Promise<Task> {
+    const res = await fetch(`/api/tasks/${encodeURIComponent(id)}/move`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ boardId, statusId }),
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => null);
+      throw new Error(error?.error || 'Falha ao mover tarefa para outro board');
+    }
+    const data = await res.json();
+    return data.task;
+  },
+
   async deleteTask(id: string): Promise<void> {
     const res = await fetch(`/api/tasks/${encodeURIComponent(id)}`, {
       method: 'DELETE',

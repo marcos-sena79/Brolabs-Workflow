@@ -158,6 +158,11 @@ export const taskUpdateSchema = z
   })
   .passthrough();
 
+export const taskMoveSchema = z.object({
+  boardId: idSchema,
+  statusId: idSchema,
+});
+
 // --- Integrações / webhooks (S2, item 5) ---
 
 export const integrationUpdateSchema = z

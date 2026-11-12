@@ -114,6 +114,7 @@ interface AgileContextType {
   }) => Task;
   updateTask: (taskId: string, updates: Partial<Task>) => void;
   moveTask: (taskId: string, targetStatusId: string) => void;
+  moveTaskToBoard: (taskId: string, targetBoardId: string, targetStatusId: string) => Promise<Task>;
   deleteTask: (taskId: string) => void;
   archiveTask: (taskId: string, force?: boolean) => Promise<void>;
   unarchiveTask: (taskId: string) => Promise<void>;
@@ -955,6 +956,17 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return t;
       })
     );
+  };
+
+  const moveTaskToBoard = async (taskId: string, targetBoardId: string, targetStatusId: string) => {
+    const movedTask = await api.moveTaskToBoard(taskId, targetBoardId, targetStatusId);
+    setTasks((prev) => prev.map((task) => (task.id === taskId ? movedTask : task)));
+    setAttachmentsByTask((prev) => ({
+      ...prev,
+      [taskId]: (prev[taskId] || []).map((attachment) => ({ ...attachment, boardId: targetBoardId })),
+    }));
+    setCurrentBoardId(targetBoardId);
+    return movedTask;
   };
 
   // Move task (Drag and drop or status select)
@@ -1994,6 +2006,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         createTask,
         updateTask,
         moveTask,
+        moveTaskToBoard,
         deleteTask,
         archiveTask,
         unarchiveTask,
