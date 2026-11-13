@@ -1140,29 +1140,72 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   };
 
   const toggleSubtask = (taskId: string, subtaskId: string) => {
+    const task = tasks.find((t) => t.id === taskId);
+    const sub = task?.subtasks.find((s) => s.id === subtaskId);
+
     setTasks((prev) =>
       prev.map((t) => {
         if (t.id === taskId) {
           const updatedSubtasks = t.subtasks.map((s) => {
             if (s.id === subtaskId) {
-              return { ...s, completed: !s.completed };
+              const isCompleting = !s.completed;
+              // When completing: auto-assign loggedHours if not already set
+              // When reopening: reset loggedHours to 0 if it was auto-assigned
+              const wasAutoAssigned = s.loggedHours === s.estimatedHours && s.loggedHours > 0;
+              return {
+                ...s,
+                completed: isCompleting,
+                loggedHours: isCompleting && s.loggedHours === 0 ? s.estimatedHours : (!isCompleting && wasAutoAssigned ? 0 : s.loggedHours),
+              };
             }
             return s;
           });
-          api.updateTask(taskId, { subtasks: updatedSubtasks }).catch(console.error);
-          return {
+
+          const updatedTask = {
             ...t,
             subtasks: updatedSubtasks,
             updatedAt: new Date().toISOString(),
           };
+
+          // If completing a subtask, create a worklog entry for the parent task
+          const updatedSubtask = updatedSubtasks.find((s) => s.id === subtaskId);
+          if (updatedSubtask && updatedSubtask.completed && sub && !sub.completed) {
+            // Only add worklog when transitioning from incomplete to complete
+            const newLog: WorkLog = {
+              id: `wl-${Date.now()}`,
+              taskId,
+              memberId: currentUser.id,
+              hours: Number(updatedSubtask.estimatedHours.toFixed(1)),
+              date: new Date().toISOString().split('T')[0],
+              comment: `Sub-tarefa concluída: ${sub.title}`,
+              createdAt: new Date().toISOString(),
+            };
+            const updatedWorklogs = [newLog, ...t.worklogs];
+            const newLoggedHours = Number((t.loggedHours + updatedSubtask.estimatedHours).toFixed(1));
+
+            api.updateTask(taskId, {
+              subtasks: updatedSubtasks,
+              worklogs: updatedWorklogs,
+              loggedHours: newLoggedHours,
+            }).catch(console.error);
+
+            return {
+              ...updatedTask,
+              worklogs: updatedWorklogs,
+              loggedHours: newLoggedHours,
+            };
+          }
+
+          api.updateTask(taskId, { subtasks: updatedSubtasks }).catch(console.error);
+          return updatedTask;
         }
         return t;
       })
     );
 
-    const task = tasks.find((t) => t.id === taskId);
-    const sub = task?.subtasks.find((s) => s.id === subtaskId);
     if (task && sub) {
+      const newSub = task.subtasks.find((s) => s.id === subtaskId);
+      const isNowCompleting = newSub && newSub.completed && !sub.completed;
       logActivity({
         type: 'subtask_toggled',
         taskId: task.id,
@@ -1170,7 +1213,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         taskTitle: task.title,
         memberId: currentUser.id,
         memberName: currentUser.name,
-        details: `${sub.completed ? 'Reabriu' : 'Concluiu'} sub-tarefa: "${sub.title}"`,
+        details: `${sub.completed ? 'Reabriu' : 'Concluiu'} sub-tarefa: "${sub.title}"${isNowCompleting ? ` (${sub.estimatedHours}h registradas automaticamente)` : ''}`,
       });
     }
   };
