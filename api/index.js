@@ -51,6 +51,27 @@ function normalizeAssigneeIds(input, fallback = []) {
   return out;
 }
 
+// src/utils/taskHierarchy.ts
+var parentTypeByChild = {
+  story: "epic",
+  task: "story",
+  bug: "bug"
+};
+var isValidParentType = (childType, parentType) => parentTypeByChild[childType] === parentType;
+var canSetTaskParent = (child, parent, tasks) => {
+  if (child.id === parent.id || child.boardId !== parent.boardId) return false;
+  if (!isValidParentType(child.issueType, parent.issueType)) return false;
+  if (child.issueType === "bug" && parent.parentId) return false;
+  const visited = /* @__PURE__ */ new Set();
+  let ancestor = parent;
+  while (ancestor) {
+    if (ancestor.id === child.id || visited.has(ancestor.id)) return false;
+    visited.add(ancestor.id);
+    ancestor = ancestor.parentId ? tasks.find((task) => task.id === ancestor?.parentId) : void 0;
+  }
+  return true;
+};
+
 // src/data/initialData.ts
 var INITIAL_MEMBERS = [
   {
@@ -1154,7 +1175,7 @@ var taskCreateSchema = z.object({
   key: z.string().trim().min(1).max(50),
   boardId: idSchema,
   title: z.string().trim().min(1).max(500),
-  issueType: z.string().min(1).max(50),
+  issueType: z.enum(["story", "task", "bug", "epic"]),
   priority: z.string().min(1).max(50),
   statusId: z.string().min(1).max(100),
   assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
@@ -1162,6 +1183,7 @@ var taskCreateSchema = z.object({
 }).passthrough();
 var taskUpdateSchema = z.object({
   title: z.string().trim().min(1).max(500).optional(),
+  issueType: z.enum(["story", "task", "bug", "epic"]).optional(),
   statusId: z.string().min(1).max(100).optional(),
   assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
   parentId: z.string().trim().min(1).max(100).nullable().optional()
@@ -4011,9 +4033,45 @@ async function handleTaskCreatedEvents(task) {
     console.error("handleTaskCreatedEvents falhou:", e?.message || e);
   }
 }
+async function loadTaskHierarchyNodes(boardIds) {
+  const result = await query(
+    `SELECT id, board_id AS "boardId", issue_type AS "issueType", parent_id AS "parentId"
+     FROM tasks WHERE board_id = ANY($1::varchar[])`,
+    [boardIds]
+  );
+  return result.rows;
+}
+function validateTaskHierarchyNode(task, tasks) {
+  if (task.parentId) {
+    const parent = tasks.find((candidate) => candidate.id === task.parentId);
+    if (!parent) return "O card pai precisa existir no mesmo quadro.";
+    if (!canSetTaskParent(task, parent, tasks)) {
+      return "A hierarquia de cards n\xE3o permite esse v\xEDnculo.";
+    }
+  }
+  const hasInvalidChild = tasks.some(
+    (child) => child.parentId === task.id && child.id !== task.id && !canSetTaskParent(child, task, tasks)
+  );
+  if (hasInvalidChild) return "O tipo do card n\xE3o \xE9 compat\xEDvel com um ou mais cards filhos.";
+  return null;
+}
 app.post("/api/tasks", authenticateToken, requireBoardPermission("canCreateTask"), validateBody(taskCreateSchema), async (req, res) => {
   try {
     const t = req.body;
+    if (t.issueType !== "task" && Array.isArray(t.subtasks) && t.subtasks.length > 0) {
+      return res.status(400).json({ error: "Somente tarefas podem conter subtarefas." });
+    }
+    if (t.parentId) {
+      const hierarchyTasks = await loadTaskHierarchyNodes([t.boardId]);
+      const newTask = {
+        id: t.id,
+        boardId: t.boardId,
+        issueType: t.issueType,
+        parentId: t.parentId
+      };
+      const hierarchyError = validateTaskHierarchyNode(newTask, [...hierarchyTasks, newTask]);
+      if (hierarchyError) return res.status(400).json({ error: hierarchyError });
+    }
     const assigneeIds = normalizeAssigneeIds(t.assigneeIds, t.assigneeId ? [t.assigneeId] : []);
     await query(
       `INSERT INTO tasks (
@@ -4132,14 +4190,39 @@ app.post("/api/tasks/:id/move", authenticateToken, validateBody(taskMoveSchema),
       targetBoard.key,
       targetKeysRes.rows.map((row) => String(row.key || ""))
     );
-    const parentExists = lockedTask.parentId ? Boolean(
-      (await client2.query("SELECT 1 FROM tasks WHERE id = $1 AND board_id = $2", [
-        lockedTask.parentId,
-        targetBoardId
-      ])).rows.length
-    ) : false;
-    const relations = migratedTaskRelations(lockedTask, sourceBoard, targetBoard, parentExists);
+    const targetHierarchyRes = await client2.query(
+      `SELECT id, board_id AS "boardId", issue_type AS "issueType", parent_id AS "parentId"
+       FROM tasks WHERE board_id = $1`,
+      [targetBoardId]
+    );
+    const targetHierarchy = targetHierarchyRes.rows;
+    const targetParent = lockedTask.parentId ? targetHierarchy.find((task) => task.id === lockedTask.parentId) : void 0;
+    const movedNode = {
+      id: lockedTask.id,
+      boardId: targetBoardId,
+      issueType: lockedTask.issueType,
+      parentId: lockedTask.parentId
+    };
+    const canKeepParent = Boolean(
+      targetParent && canSetTaskParent(movedNode, targetParent, targetHierarchy)
+    );
+    const relations = migratedTaskRelations(lockedTask, sourceBoard, targetBoard, canKeepParent);
     const updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const movedHierarchyNode = { ...movedNode, parentId: relations.parentId };
+    const movedHierarchy = [...targetHierarchy, movedHierarchyNode];
+    const childTasksRes = await client2.query(
+      `SELECT id, board_id AS "boardId", issue_type AS "issueType", parent_id AS "parentId"
+       FROM tasks WHERE parent_id = $1 FOR UPDATE`,
+      [id]
+    );
+    for (const child of childTasksRes.rows) {
+      if (child.boardId !== targetBoardId || !canSetTaskParent(child, movedHierarchyNode, movedHierarchy)) {
+        await client2.query("UPDATE tasks SET parent_id = NULL, updated_at = $1 WHERE id = $2", [
+          updatedAt,
+          child.id
+        ]);
+      }
+    }
     const updatedRes = await client2.query(
       `UPDATE tasks
        SET board_id = $1, key = $2, status_id = $3, epic_id = $4, parent_id = $5, updated_at = $6
@@ -4186,6 +4269,12 @@ app.put("/api/tasks/:id", authenticateToken, validateBody(taskUpdateSchema), asy
       return res.status(403).json({ error: "Sem permiss\xE3o para esta a\xE7\xE3o", required: "canAddComment" });
     }
     const merged = { ...current, ...updates, updatedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    if ("issueType" in updates && current.issueType === "task" && merged.issueType !== "task" && (current.subtasks || []).length > 0) {
+      return res.status(400).json({ error: "Remova as subtarefas antes de alterar o tipo do card." });
+    }
+    if ("subtasks" in updates && merged.issueType !== "task" && Array.isArray(updates.subtasks) && updates.subtasks.length > 0) {
+      return res.status(400).json({ error: "Somente tarefas podem conter subtarefas." });
+    }
     let assigneeIds;
     if ("assigneeIds" in updates) {
       assigneeIds = normalizeAssigneeIds(updates.assigneeIds, current.assigneeIds);
@@ -4196,6 +4285,19 @@ app.put("/api/tasks/:id", authenticateToken, validateBody(taskUpdateSchema), asy
     }
     merged.assigneeIds = assigneeIds;
     merged.assigneeId = assigneeIds[0] || "";
+    if ("parentId" in updates || "issueType" in updates || "boardId" in updates) {
+      const boardIds = [.../* @__PURE__ */ new Set([current.boardId, merged.boardId])];
+      const hierarchyTasks = await loadTaskHierarchyNodes(boardIds);
+      const updatedNode = {
+        id: merged.id,
+        boardId: merged.boardId,
+        issueType: merged.issueType,
+        parentId: merged.parentId || null
+      };
+      const hierarchyWithUpdate = hierarchyTasks.filter((task) => task.id !== updatedNode.id).concat(updatedNode);
+      const hierarchyError = validateTaskHierarchyNode(updatedNode, hierarchyWithUpdate);
+      if (hierarchyError) return res.status(400).json({ error: hierarchyError });
+    }
     await query(
       `UPDATE tasks SET
         key = $1, board_id = $2, title = $3, description = $4, issue_type = $5,
@@ -4413,24 +4515,41 @@ ${built.context.slice(0, 2e4)}
   }
 });
 app.delete("/api/tasks/:id", authenticateToken, async (req, res) => {
+  let client2;
+  let transactionStarted = false;
   try {
     const { id } = req.params;
-    const existingRes = await query("SELECT board_id FROM tasks WHERE id = $1", [id]);
+    client2 = await pool.connect();
+    await client2.query("BEGIN");
+    transactionStarted = true;
+    const existingRes = await client2.query("SELECT board_id FROM tasks WHERE id = $1 FOR UPDATE", [id]);
     if (existingRes.rows.length === 0) {
+      await client2.query("ROLLBACK");
+      transactionStarted = false;
       return res.status(404).json({ error: "Task not found" });
     }
     const eff = await resolvePermissions(req.memberId, existingRes.rows[0].board_id);
     if (!eff) {
+      await client2.query("ROLLBACK");
+      transactionStarted = false;
       return res.status(403).json({ error: "Sem acesso a este quadro" });
     }
     if (!eff.canDeleteTask) {
+      await client2.query("ROLLBACK");
+      transactionStarted = false;
       return res.status(403).json({ error: "Sem permiss\xE3o para esta a\xE7\xE3o", required: "canDeleteTask" });
     }
-    await query("DELETE FROM tasks WHERE id = $1", [id]);
+    await client2.query("UPDATE tasks SET parent_id = NULL WHERE parent_id = $1", [id]);
+    await client2.query("DELETE FROM tasks WHERE id = $1", [id]);
+    await client2.query("COMMIT");
+    transactionStarted = false;
     res.json({ success: true });
   } catch (error) {
+    if (transactionStarted && client2) await client2.query("ROLLBACK");
     console.error("Error deleting task:", error);
     res.status(500).json({ error: error.message });
+  } finally {
+    client2?.release();
   }
 });
 app.post("/api/tasks/:id/archive", authenticateToken, async (req, res) => {

@@ -12,7 +12,7 @@ import {
   Search,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate, isTaskDone } from '../utils/agileHelpers';
+import { formatHours, formatDate, getTaskHours, isTaskDone } from '../utils/agileHelpers';
 import { taskAssigneeIds, taskHasAssignee } from '../utils/taskAssignees';
 import { IssueTypeIcon } from './AgileIcons';
 
@@ -39,12 +39,15 @@ export const TimeManagementView: React.FC = () => {
   const [showQuickLogModal, setShowQuickLogModal] = useState(false);
 
   // Totals
-  const totalEstimated = boardTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
-  const totalLogged = boardTasks.reduce((acc, t) => acc + (t.loggedHours || 0), 0);
+  const totalEstimated = boardTasks.reduce((acc, t) => acc + getTaskHours(t).estimatedHours, 0);
+  const totalLogged = boardTasks.reduce((acc, t) => acc + getTaskHours(t).loggedHours, 0);
   const totalVariance = Number((totalLogged - totalEstimated).toFixed(1));
 
   // Overrun tasks
-  const overrunTasks = boardTasks.filter((t) => t.estimatedHours > 0 && t.loggedHours > t.estimatedHours);
+  const overrunTasks = boardTasks.filter((t) => {
+    const { estimatedHours, loggedHours } = getTaskHours(t);
+    return estimatedHours > 0 && loggedHours > estimatedHours;
+  });
 
   // Accuracy calculation: sum of abs differences vs estimated
   const accuracyPercent =
@@ -58,9 +61,14 @@ export const TimeManagementView: React.FC = () => {
       const q = searchTerm.toLowerCase();
       if (!t.key.toLowerCase().includes(q) && !t.title.toLowerCase().includes(q)) return false;
     }
-    if (memberFilter !== 'all' && !taskHasAssignee(t, memberFilter)) return false;
+    if (
+      memberFilter !== 'all' &&
+      !taskHasAssignee(t, memberFilter) &&
+      !(t.subtasks || []).some((subtask) => taskHasAssignee(subtask, memberFilter))
+    ) return false;
     if (filterType === 'overrun') {
-      return t.estimatedHours > 0 && t.loggedHours > t.estimatedHours;
+      const { estimatedHours, loggedHours } = getTaskHours(t);
+      return estimatedHours > 0 && loggedHours > estimatedHours;
     }
     if (filterType === 'completed') {
       return isTaskDone(currentBoard, t.statusId);
@@ -85,13 +93,14 @@ export const TimeManagementView: React.FC = () => {
     const headers = ['Chave', 'Titulo', 'Tipo', 'Responsavel', 'Status', 'Horas Estimadas', 'Horas Realizadas', 'Variancia (h)'];
     const rows = boardTasks.map((t) => {
       const member =
-        taskAssigneeIds(t)
+        [...new Set([...taskAssigneeIds(t), ...(t.subtasks || []).flatMap((subtask) => taskAssigneeIds(subtask))])]
           .map((id) => members.find((m) => m.id === id)?.name)
           .filter(Boolean)
           .join('; ') || 'N/A';
       const col = currentBoard.columns.find((c) => c.id === t.statusId)?.title || 'N/A';
-      const variance = (t.loggedHours - t.estimatedHours).toFixed(1);
-      return `"${t.key}","${t.title.replace(/"/g, '""')}","${t.issueType}","${member}","${col}",${t.estimatedHours},${t.loggedHours},${variance}`;
+      const { estimatedHours, loggedHours } = getTaskHours(t);
+      const variance = (loggedHours - estimatedHours).toFixed(1);
+      return `"${t.key}","${t.title.replace(/"/g, '""')}","${t.issueType}","${member}","${col}",${estimatedHours},${loggedHours},${variance}`;
     });
 
     const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows].join('\n');
@@ -206,8 +215,8 @@ export const TimeManagementView: React.FC = () => {
         <div className="space-y-3">
           {currentBoard.epics?.map((epic) => {
             const epicTasks = boardTasks.filter((t) => t.epicId === epic.id);
-            const epicEst = epicTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
-            const epicLog = epicTasks.reduce((acc, t) => acc + (t.loggedHours || 0), 0);
+            const epicEst = epicTasks.reduce((acc, t) => acc + getTaskHours(t).estimatedHours, 0);
+            const epicLog = epicTasks.reduce((acc, t) => acc + getTaskHours(t).loggedHours, 0);
             const pct = epicEst > 0 ? Math.min(100, Math.round((epicLog / epicEst) * 100)) : 0;
             const isEpicOverrun = epicEst > 0 && epicLog > epicEst;
 
@@ -339,8 +348,7 @@ export const TimeManagementView: React.FC = () => {
               {displayedTasks.map((task) => {
                 const assignee = members.find((m) => m.id === task.assigneeId);
                 const col = currentBoard.columns.find((c) => c.id === task.statusId);
-                const est = task.estimatedHours || 0;
-                const log = task.loggedHours || 0;
+                const { estimatedHours: est, loggedHours: log } = getTaskHours(task);
                 const variance = Number((log - est).toFixed(1));
                 const isOver = est > 0 && log > est;
                 const pct = est > 0 ? Math.min(100, Math.round((log / est) * 100)) : 0;

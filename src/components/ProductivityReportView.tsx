@@ -15,7 +15,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate, isTaskDone } from '../utils/agileHelpers';
+import { formatHours, formatDate, getTaskHours, isTaskDone } from '../utils/agileHelpers';
 
 export const ProductivityReportView: React.FC = () => {
   const { currentBoard, boardTasks, members } = useAgile();
@@ -32,10 +32,13 @@ export const ProductivityReportView: React.FC = () => {
   const totalPoints = boardTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0);
   const donePoints = doneTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0);
 
-  const totalEstHours = boardTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
-  const totalLogHours = boardTasks.reduce((acc, t) => acc + (t.loggedHours || 0), 0);
+  const totalEstHours = boardTasks.reduce((acc, t) => acc + getTaskHours(t).estimatedHours, 0);
+  const totalLogHours = boardTasks.reduce((acc, t) => acc + getTaskHours(t).loggedHours, 0);
 
-  const overrunTasks = boardTasks.filter((t) => t.estimatedHours > 0 && t.loggedHours > t.estimatedHours);
+  const overrunTasks = boardTasks.filter((t) => {
+    const { estimatedHours, loggedHours } = getTaskHours(t);
+    return estimatedHours > 0 && loggedHours > estimatedHours;
+  });
 
   // Flow metrics (simulated/computed based on days and task points)
   const averageCycleTimeDays = 2.8;

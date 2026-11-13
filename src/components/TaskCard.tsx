@@ -17,7 +17,7 @@ import {
 import { Task } from '../types';
 import { useAgile } from '../context/AgileContext';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
-import { formatHours, formatDate, isOverdue, isTaskDone } from '../utils/agileHelpers';
+import { formatHours, formatDate, getTaskHours, isOverdue, isTaskDone } from '../utils/agileHelpers';
 import { taskAssigneeIds } from '../utils/taskAssignees';
 
 interface TaskCardProps {
@@ -52,8 +52,7 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
   const completedSubtasks = task.subtasks?.filter((s) => s.completed).length || 0;
 
   // Time tracking ratio & overrun
-  const estimated = task.estimatedHours || 0;
-  const logged = task.loggedHours || 0;
+  const { estimatedHours: estimated, loggedHours: logged } = getTaskHours(task);
   const isOverrun = estimated > 0 && logged > estimated;
   const overrunHours = isOverrun ? Number((logged - estimated).toFixed(1)) : 0;
   const timePercent = estimated > 0 ? Math.min(100, Math.round((logged / estimated) * 100)) : 0;

@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { ViewTab } from '../types';
-import { isTaskDone } from '../utils/agileHelpers';
+import { getTaskHours, isTaskDone } from '../utils/agileHelpers';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -44,8 +44,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose }) => {
   const doneTasks = boardTasks.filter((t) => isTaskDone(currentBoard, t.statusId)).length;
   const progressPercent = totalTasks > 0 ? Math.round((doneTasks / totalTasks) * 100) : 0;
 
-  const totalEstimated = boardTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
-  const totalLogged = boardTasks.reduce((acc, t) => acc + (t.loggedHours || 0), 0);
+  const totalEstimated = boardTasks.reduce((acc, t) => acc + getTaskHours(t).estimatedHours, 0);
+  const totalLogged = boardTasks.reduce((acc, t) => acc + getTaskHours(t).loggedHours, 0);
 
   const pendingTodos = dailyTodos.filter((t) => !t.done).length;
 

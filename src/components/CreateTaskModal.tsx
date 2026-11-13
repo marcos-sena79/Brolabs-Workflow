@@ -3,8 +3,9 @@ import { X, Plus, Sparkles } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { Epic, IssueType, Priority } from '../types';
 import { IssueTypeIcon } from './AgileIcons';
-import { getTodoColumnId } from '../utils/agileHelpers';
+import { getIssueTypeLabel, getTodoColumnId } from '../utils/agileHelpers';
 import { normalizeAssigneeIds } from '../utils/taskAssignees';
+import { canSetTaskParent, getAllowedParentType } from '../utils/taskHierarchy';
 
 export const CreateTaskModal: React.FC = () => {
   const {
@@ -44,6 +45,17 @@ export const CreateTaskModal: React.FC = () => {
   const [initialBlockerTaskId, setInitialBlockerTaskId] = useState('');
 
   if (!isCreateModalOpen) return null;
+
+  const parentIssueType = getAllowedParentType(issueType);
+  const parentCandidates = parentIssueType
+    ? tasks.filter((candidate) =>
+        canSetTaskParent(
+          { id: '', boardId: currentBoard.id, issueType, parentId: candidate.id },
+          candidate,
+          tasks
+        )
+      )
+    : [];
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -106,7 +118,7 @@ export const CreateTaskModal: React.FC = () => {
     }
 
     // Add quick subtasks if entered
-    if (quickSubtasksInput.trim()) {
+    if (issueType === 'task' && quickSubtasksInput.trim()) {
       const subtaskLines = quickSubtasksInput
         .split('\n')
         .map((l) => l.trim())
@@ -171,7 +183,12 @@ export const CreateTaskModal: React.FC = () => {
               </label>
               <select
                 value={issueType}
-                onChange={(e) => setIssueType(e.target.value as IssueType)}
+                onChange={(e) => {
+                  const nextIssueType = e.target.value as IssueType;
+                  setIssueType(nextIssueType);
+                  setParentId('');
+                  if (nextIssueType !== 'task') setQuickSubtasksInput('');
+                }}
                 className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
               >
                 <option value="story">História (Story)</option>
@@ -378,26 +395,25 @@ export const CreateTaskModal: React.FC = () => {
             </div>
           )}
 
-          {/* História pai (Onda 2 — 2A) */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              História pai (opcional)
-            </label>
-            <select
-              value={parentId}
-              onChange={(e) => setParentId(e.target.value)}
-              className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-            >
-              <option value="">Nenhuma (tarefa avulsa)</option>
-              {tasks
-                .filter((t) => t.boardId === currentBoard.id && t.issueType === 'story')
-                .map((t) => (
-                  <option key={t.id} value={t.id}>
-                    [{t.key}] {t.title.length > 60 ? `${t.title.substring(0, 60)}...` : t.title}
+          {parentIssueType && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                {getIssueTypeLabel(parentIssueType)} pai (opcional)
+              </label>
+              <select
+                value={parentId}
+                onChange={(e) => setParentId(e.target.value)}
+                className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+              >
+                <option value="">Sem {getIssueTypeLabel(parentIssueType).toLowerCase()} pai</option>
+                {parentCandidates.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    [{candidate.key}] {candidate.title.length > 60 ? `${candidate.title.substring(0, 60)}...` : candidate.title}
                   </option>
                 ))}
-            </select>
-          </div>
+              </select>
+            </div>
+          )}
 
           {/* Time Tracking (Estimativa) & Due Date */}
           <div className="grid grid-cols-3 gap-3">
@@ -507,19 +523,20 @@ export const CreateTaskModal: React.FC = () => {
             )}
           </div>
 
-          {/* Quick Subtasks Batch Adder */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-              Sub-tarefas Iniciais (Uma por linha - Opcional)
-            </label>
-            <textarea
-              rows={2}
-              placeholder="Ex:&#10;Criar schema do banco&#10;Implementar controller REST&#10;Escrever testes unitários"
-              value={quickSubtasksInput}
-              onChange={(e) => setQuickSubtasksInput(e.target.value)}
-              className="w-full text-xs font-mono px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
+          {issueType === 'task' && (
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                Sub-tarefas Iniciais (Uma por linha - Opcional)
+              </label>
+              <textarea
+                rows={2}
+                placeholder="Ex:&#10;Criar schema do banco&#10;Implementar controller REST&#10;Escrever testes unitários"
+                value={quickSubtasksInput}
+                onChange={(e) => setQuickSubtasksInput(e.target.value)}
+                className="w-full text-xs font-mono px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+          )}
 
           {/* Auto-registro no catálogo ao criar item tipo Épico */}
           {issueType === 'epic' && (

@@ -29,7 +29,7 @@ import { api } from '../services/api';
 import { normalizeAssigneeIds, taskHasAssignee } from '../utils/taskAssignees';
 import { useAuth } from './AuthContext';
 import { useTheme } from './ThemeContext';
-import { getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
+import { getTaskHours, getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
 import { playSound, SoundEvent } from '../utils/sound';
 import { EMPTY_BOARD, EMPTY_MEMBER, resolveInitialState } from '../utils/initialDataFlow';
 
@@ -960,7 +960,18 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 
   const moveTaskToBoard = async (taskId: string, targetBoardId: string, targetStatusId: string) => {
     const movedTask = await api.moveTaskToBoard(taskId, targetBoardId, targetStatusId);
-    setTasks((prev) => prev.map((task) => (task.id === taskId ? movedTask : task)));
+    setTasks((prev) =>
+      prev.map((task) =>
+        task.id === taskId
+          ? movedTask
+          : task.parentId === taskId
+            ? { ...task, parentId: null }
+            : task
+      )
+    );
+    setArchivedTasks((prev) =>
+      prev.map((task) => (task.parentId === taskId ? { ...task, parentId: null } : task))
+    );
     setAttachmentsByTask((prev) => ({
       ...prev,
       [taskId]: (prev[taskId] || []).map((attachment) => ({ ...attachment, boardId: targetBoardId })),
@@ -1065,10 +1076,15 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         .filter((t) => t.id !== taskId)
         .map((t) => ({
           ...t,
+          parentId: t.parentId === taskId ? null : t.parentId,
           dependencies: (t.dependencies || []).filter((d) => d.targetTaskId !== taskId),
         }))
     );
-    setArchivedTasks((prev) => prev.filter((t) => t.id !== taskId));
+    setArchivedTasks((prev) =>
+      prev
+        .filter((t) => t.id !== taskId)
+        .map((t) => (t.parentId === taskId ? { ...t, parentId: null } : t))
+    );
     setAttachmentsByTask((prev) => {
       if (!(taskId in prev)) return prev;
       const next = { ...prev };
@@ -1356,6 +1372,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const task = tasks.find((t) => t.id === taskId);
     if (task) {
       const totalLoggedNow = Number((task.loggedHours + hours).toFixed(1));
+      const { estimatedHours, loggedHours } = getTaskHours({ ...task, loggedHours: totalLoggedNow });
       logActivity({
         type: 'worklog_added',
         taskId: task.id,
@@ -1363,7 +1380,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         taskTitle: task.title,
         memberId: currentUser.id,
         memberName: currentUser.name,
-        details: `Registrou ${hours}h (${newLog.comment}). Total na tarefa: ${totalLoggedNow}h / ${task.estimatedHours}h`,
+        details: `Registrou ${hours}h (${newLog.comment}). Total na tarefa: ${loggedHours}h / ${estimatedHours}h`,
       });
     }
   };

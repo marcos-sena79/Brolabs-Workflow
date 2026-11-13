@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { Member } from '../types';
-import { formatHours, formatDate, isTaskDone } from '../utils/agileHelpers';
+import { formatHours, formatDate, getTaskHoursForMember, isTaskDone } from '../utils/agileHelpers';
 import { taskHasAssignee } from '../utils/taskAssignees';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 import { api } from '../services/api';
@@ -63,19 +63,33 @@ export const MemberPerformanceView: React.FC = () => {
   // Compute metrics for every member
   const memberStats = members.map((member) => {
     // Item 1 (D1): tarefa conta para cada responsável; totais globais são por tarefa (1×)
-    const memberTasks = boardTasks.filter((t) => taskHasAssignee(t, member.id));
+    const memberTasks = boardTasks.filter(
+      (t) =>
+        taskHasAssignee(t, member.id) ||
+        (t.subtasks || []).some((subtask) => taskHasAssignee(subtask, member.id))
+    );
     const doneTasks = memberTasks.filter((t) => isTaskDone(currentBoard, t.statusId));
     const inProgressTasks = memberTasks.filter((t) => t.statusId === 'col-inprogress');
 
-    const estimatedHours = memberTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
-    const loggedHours = memberTasks.reduce((acc, t) => acc + (t.loggedHours || 0), 0);
+    const estimatedHours = memberTasks.reduce(
+      (acc, task) => acc + getTaskHoursForMember(task, member.id).estimatedHours,
+      0
+    );
 
     // Worklogs registered by this member directly
     const memberWorklogs = boardTasks
       .flatMap((t) => t.worklogs || [])
       .filter((wl) => wl.memberId === member.id);
-    const totalWorklogHours = memberWorklogs.reduce((acc, wl) => acc + wl.hours, 0);
-
+    const totalWorklogHours =
+      memberWorklogs.reduce((acc, wl) => acc + wl.hours, 0) +
+      memberTasks.reduce(
+        (acc, task) =>
+          acc +
+          (task.subtasks || [])
+            .filter((subtask) => taskHasAssignee(subtask, member.id))
+            .reduce((subtaskHours, subtask) => subtaskHours + (subtask.loggedHours || 0), 0),
+        0
+      );
     // On-time rate
     const onTimeRate =
       doneTasks.length > 0
@@ -90,9 +104,11 @@ export const MemberPerformanceView: React.FC = () => {
     const utilizationRate = Math.min(100, Math.round((totalWorklogHours / member.weeklyCapacityHours) * 100));
 
     // Overrun tasks count
-    const overrunCount = memberTasks.filter(
-      (t) => t.estimatedHours > 0 && t.loggedHours > t.estimatedHours
-    ).length;
+    const overrunCount = memberTasks.filter((task) => {
+      const { estimatedHours: taskEstimatedHours, loggedHours: taskLoggedHours } =
+        getTaskHoursForMember(task, member.id);
+      return taskEstimatedHours > 0 && taskLoggedHours > taskEstimatedHours;
+    }).length;
 
     return {
       member,
@@ -293,7 +309,8 @@ export const MemberPerformanceView: React.FC = () => {
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {selectedStats.tasks.map((task) => {
                 const col = currentBoard.columns.find((c) => c.id === task.statusId);
-                const isOver = task.estimatedHours > 0 && task.loggedHours > task.estimatedHours;
+                const { estimatedHours, loggedHours } = getTaskHoursForMember(task, selectedMember.id);
+                const isOver = estimatedHours > 0 && loggedHours > estimatedHours;
                 return (
                   <div
                     key={task.id}
@@ -310,7 +327,7 @@ export const MemberPerformanceView: React.FC = () => {
 
                     <div className="flex items-center gap-2.5 shrink-0">
                       <span className="font-mono text-[11px] text-slate-600 dark:text-slate-400">
-                        {formatHours(task.loggedHours)}/{formatHours(task.estimatedHours)}
+                        {formatHours(loggedHours)}/{formatHours(estimatedHours)}
                       </span>
                       <span className="text-[10px] px-2 py-0.5 rounded bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300">
                         {col?.title}

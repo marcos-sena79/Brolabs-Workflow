@@ -8,6 +8,7 @@ import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import { pool, query } from './src/server/db';
 import { normalizeAssigneeIds, taskAssigneeIds } from './src/utils/taskAssignees';
+import { canSetTaskParent, type TaskHierarchyNode } from './src/utils/taskHierarchy';
 import { initializeDatabase, seedDatabase } from './src/server/initDb';
 import {
   authenticateToken,
@@ -957,9 +958,56 @@ async function handleTaskCreatedEvents(task: any): Promise<void> {
   }
 }
 
+async function loadTaskHierarchyNodes(boardIds: string[]): Promise<TaskHierarchyNode[]> {
+  const result = await query(
+    `SELECT id, board_id AS "boardId", issue_type AS "issueType", parent_id AS "parentId"
+     FROM tasks WHERE board_id = ANY($1::varchar[])`,
+    [boardIds]
+  );
+  return result.rows;
+}
+
+function validateTaskHierarchyNode(
+  task: TaskHierarchyNode,
+  tasks: TaskHierarchyNode[]
+): string | null {
+  if (task.parentId) {
+    const parent = tasks.find((candidate) => candidate.id === task.parentId);
+    if (!parent) return 'O card pai precisa existir no mesmo quadro.';
+    if (!canSetTaskParent(task, parent, tasks)) {
+      return 'A hierarquia de cards não permite esse vínculo.';
+    }
+  }
+
+  const hasInvalidChild = tasks.some(
+    (child) =>
+      child.parentId === task.id &&
+      child.id !== task.id &&
+      !canSetTaskParent(child, task, tasks)
+  );
+  if (hasInvalidChild) return 'O tipo do card não é compatível com um ou mais cards filhos.';
+
+  return null;
+}
+
 app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'), validateBody(taskCreateSchema), async (req, res) => {
   try {
     const t = req.body;
+    if (t.issueType !== 'task' && Array.isArray(t.subtasks) && t.subtasks.length > 0) {
+      return res.status(400).json({ error: 'Somente tarefas podem conter subtarefas.' });
+    }
+    if (t.parentId) {
+      const hierarchyTasks = await loadTaskHierarchyNodes([t.boardId]);
+      const newTask: TaskHierarchyNode = {
+        id: t.id,
+        boardId: t.boardId,
+        issueType: t.issueType,
+        parentId: t.parentId,
+      };
+      const hierarchyError = validateTaskHierarchyNode(newTask, [...hierarchyTasks, newTask]);
+      if (hierarchyError) return res.status(400).json({ error: hierarchyError });
+    }
+
     const assigneeIds = normalizeAssigneeIds(t.assigneeIds, t.assigneeId ? [t.assigneeId] : []);
     await query(
       `INSERT INTO tasks (
@@ -1092,18 +1140,42 @@ app.post('/api/tasks/:id/move', authenticateToken, validateBody(taskMoveSchema),
       targetKeysRes.rows.map((row: { key: string }) => String(row.key || ''))
     );
 
-    const parentExists = lockedTask.parentId
-      ? Boolean(
-          (
-            await client.query('SELECT 1 FROM tasks WHERE id = $1 AND board_id = $2', [
-              lockedTask.parentId,
-              targetBoardId,
-            ])
-          ).rows.length
-        )
-      : false;
-    const relations = migratedTaskRelations(lockedTask, sourceBoard, targetBoard, parentExists);
+    const targetHierarchyRes = await client.query(
+      `SELECT id, board_id AS "boardId", issue_type AS "issueType", parent_id AS "parentId"
+       FROM tasks WHERE board_id = $1`,
+      [targetBoardId]
+    );
+    const targetHierarchy: TaskHierarchyNode[] = targetHierarchyRes.rows;
+    const targetParent = lockedTask.parentId
+      ? targetHierarchy.find((task) => task.id === lockedTask.parentId)
+      : undefined;
+    const movedNode: TaskHierarchyNode = {
+      id: lockedTask.id,
+      boardId: targetBoardId,
+      issueType: lockedTask.issueType,
+      parentId: lockedTask.parentId,
+    };
+    const canKeepParent = Boolean(
+      targetParent && canSetTaskParent(movedNode, targetParent, targetHierarchy)
+    );
+    const relations = migratedTaskRelations(lockedTask, sourceBoard, targetBoard, canKeepParent);
     const updatedAt = new Date().toISOString();
+    const movedHierarchyNode = { ...movedNode, parentId: relations.parentId };
+    const movedHierarchy = [...targetHierarchy, movedHierarchyNode];
+    const childTasksRes = await client.query(
+      `SELECT id, board_id AS "boardId", issue_type AS "issueType", parent_id AS "parentId"
+       FROM tasks WHERE parent_id = $1 FOR UPDATE`,
+      [id]
+    );
+    for (const child of childTasksRes.rows as TaskHierarchyNode[]) {
+      if (child.boardId !== targetBoardId || !canSetTaskParent(child, movedHierarchyNode, movedHierarchy)) {
+        await client.query('UPDATE tasks SET parent_id = NULL, updated_at = $1 WHERE id = $2', [
+          updatedAt,
+          child.id,
+        ]);
+      }
+    }
+
     const updatedRes = await client.query(
       `UPDATE tasks
        SET board_id = $1, key = $2, status_id = $3, epic_id = $4, parent_id = $5, updated_at = $6
@@ -1158,6 +1230,17 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
     }
 
     const merged = { ...current, ...updates, updatedAt: new Date().toISOString() };
+    if (
+      'issueType' in updates &&
+      current.issueType === 'task' &&
+      merged.issueType !== 'task' &&
+      (current.subtasks || []).length > 0
+    ) {
+      return res.status(400).json({ error: 'Remova as subtarefas antes de alterar o tipo do card.' });
+    }
+    if ('subtasks' in updates && merged.issueType !== 'task' && Array.isArray(updates.subtasks) && updates.subtasks.length > 0) {
+      return res.status(400).json({ error: 'Somente tarefas podem conter subtarefas.' });
+    }
 
     // Múltiplos responsáveis (Item 1): lista é fonte de verdade; assignee_id = 1º
     let assigneeIds: string[];
@@ -1170,6 +1253,22 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
     }
     merged.assigneeIds = assigneeIds;
     merged.assigneeId = assigneeIds[0] || '';
+
+    if ('parentId' in updates || 'issueType' in updates || 'boardId' in updates) {
+      const boardIds = [...new Set([current.boardId, merged.boardId])];
+      const hierarchyTasks = await loadTaskHierarchyNodes(boardIds);
+      const updatedNode: TaskHierarchyNode = {
+        id: merged.id,
+        boardId: merged.boardId,
+        issueType: merged.issueType,
+        parentId: merged.parentId || null,
+      };
+      const hierarchyWithUpdate = hierarchyTasks
+        .filter((task) => task.id !== updatedNode.id)
+        .concat(updatedNode);
+      const hierarchyError = validateTaskHierarchyNode(updatedNode, hierarchyWithUpdate);
+      if (hierarchyError) return res.status(400).json({ error: hierarchyError });
+    }
 
     await query(
       `UPDATE tasks SET
@@ -1431,24 +1530,41 @@ ${built.context.slice(0, 20000)}
 });
 
 app.delete('/api/tasks/:id', authenticateToken, async (req, res) => {
+  let client: PoolClient | undefined;
+  let transactionStarted = false;
   try {
     const { id } = req.params;
-    const existingRes = await query('SELECT board_id FROM tasks WHERE id = $1', [id]);
+    client = await pool.connect();
+    await client.query('BEGIN');
+    transactionStarted = true;
+    const existingRes = await client.query('SELECT board_id FROM tasks WHERE id = $1 FOR UPDATE', [id]);
     if (existingRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      transactionStarted = false;
       return res.status(404).json({ error: 'Task not found' });
     }
     const eff = await resolvePermissions(req.memberId!, existingRes.rows[0].board_id);
     if (!eff) {
+      await client.query('ROLLBACK');
+      transactionStarted = false;
       return res.status(403).json({ error: 'Sem acesso a este quadro' });
     }
     if (!eff.canDeleteTask) {
+      await client.query('ROLLBACK');
+      transactionStarted = false;
       return res.status(403).json({ error: 'Sem permissão para esta ação', required: 'canDeleteTask' });
     }
-    await query('DELETE FROM tasks WHERE id = $1', [id]);
+    await client.query('UPDATE tasks SET parent_id = NULL WHERE parent_id = $1', [id]);
+    await client.query('DELETE FROM tasks WHERE id = $1', [id]);
+    await client.query('COMMIT');
+    transactionStarted = false;
     res.json({ success: true });
   } catch (error: any) {
+    if (transactionStarted && client) await client.query('ROLLBACK');
     console.error('Error deleting task:', error);
     res.status(500).json({ error: error.message });
+  } finally {
+    client?.release();
   }
 });
 

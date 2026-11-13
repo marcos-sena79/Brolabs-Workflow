@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { X, ArchiveRestore, Trash2, Archive } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
-import { formatHours } from '../utils/agileHelpers';
+import { formatHours, getTaskHours } from '../utils/agileHelpers';
 
 export const TaskArchiveModal: React.FC = () => {
   const {
@@ -91,7 +91,7 @@ export const TaskArchiveModal: React.FC = () => {
                   </div>
                   <p className="text-[10px] text-slate-400 mt-0.5">
                     {columnName(task.statusId)} · {memberName(task.assigneeId)} ·{' '}
-                    {formatHours(task.loggedHours)} registradas
+                    {formatHours(getTaskHours(task).loggedHours)} registradas
                     {task.archivedAt &&
                       ` · arquivada em ${new Date(task.archivedAt).toLocaleDateString('pt-BR')}`}
                   </p>

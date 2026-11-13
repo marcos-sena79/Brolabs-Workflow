@@ -1,4 +1,40 @@
-import { Board, IssueType, Priority } from '../types';
+import { Board, IssueType, Priority, Task } from '../types';
+import { taskHasAssignee } from './taskAssignees';
+
+export interface TaskHours {
+  estimatedHours: number;
+  loggedHours: number;
+}
+
+export const getTaskHours = (task: Pick<Task, 'estimatedHours' | 'loggedHours' | 'subtasks'>): TaskHours => {
+  return (task.subtasks || []).reduce(
+    (hours, subtask) => ({
+      estimatedHours: hours.estimatedHours + (subtask.estimatedHours || 0),
+      loggedHours: hours.loggedHours + (subtask.loggedHours || 0),
+    }),
+    {
+      estimatedHours: task.estimatedHours || 0,
+      loggedHours: task.loggedHours || 0,
+    }
+  );
+};
+
+export const getTaskHoursForMember = (task: Task, memberId: string): TaskHours => {
+  const memberOwnsTask = taskHasAssignee(task, memberId);
+  return (task.subtasks || []).reduce(
+    (hours, subtask) => {
+      if (!taskHasAssignee(subtask, memberId)) return hours;
+      return {
+        estimatedHours: hours.estimatedHours + (subtask.estimatedHours || 0),
+        loggedHours: hours.loggedHours + (subtask.loggedHours || 0),
+      };
+    },
+    {
+      estimatedHours: memberOwnsTask ? task.estimatedHours || 0 : 0,
+      loggedHours: memberOwnsTask ? task.loggedHours || 0 : 0,
+    }
+  );
+};
 
 /** Id da coluna de conclusão do quadro (fallback 'col-done' para dados legados). */
 export const getDoneColumnId = (board: Board): string =>

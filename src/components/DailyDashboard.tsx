@@ -15,7 +15,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate, formatRelativeTime, isOverdue, isTaskDone, getTodoColumnId } from '../utils/agileHelpers';
+import { formatHours, formatDate, formatRelativeTime, getTaskHours, isOverdue, isTaskDone, getTodoColumnId } from '../utils/agileHelpers';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 
 export const DailyDashboard: React.FC = () => {
@@ -43,7 +43,8 @@ export const DailyDashboard: React.FC = () => {
   const atRiskTasks = boardTasks.filter((t) => {
     const isDone = isTaskDone(currentBoard, t.statusId);
     const overdue = isOverdue(t.dueDate, isDone);
-    const overrun = t.estimatedHours > 0 && t.loggedHours > t.estimatedHours;
+    const { estimatedHours, loggedHours } = getTaskHours(t);
+    const overrun = estimatedHours > 0 && loggedHours > estimatedHours;
     return (!isDone && overdue) || overrun;
   });
 
@@ -53,14 +54,17 @@ export const DailyDashboard: React.FC = () => {
   const totalHoursToday = todayWorklogs.reduce((acc, wl) => acc + wl.hours, 0);
 
   // Sprint totals
-  const totalEstimated = boardTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
-  const totalLogged = boardTasks.reduce((acc, t) => acc + (t.loggedHours || 0), 0);
+  const totalEstimated = boardTasks.reduce((acc, t) => acc + getTaskHours(t).estimatedHours, 0);
+  const totalLogged = boardTasks.reduce((acc, t) => acc + getTaskHours(t).loggedHours, 0);
   const sprintBurnPercent = totalEstimated > 0 ? Math.min(100, Math.round((totalLogged / totalEstimated) * 100)) : 0;
 
   // Generate Daily Standup Summary text
   const generateStandupText = () => {
     const doneLines = doneTasks.slice(0, 3).map((t) => `• [${t.key}] ${t.title}`).join('\n');
-    const inProgLines = inProgressTasks.slice(0, 4).map((t) => `• [${t.key}] ${t.title} (${t.loggedHours}h/${t.estimatedHours}h)`).join('\n');
+    const inProgLines = inProgressTasks.slice(0, 4).map((t) => {
+      const { estimatedHours, loggedHours } = getTaskHours(t);
+      return `• [${t.key}] ${t.title} (${loggedHours}h/${estimatedHours}h)`;
+    }).join('\n');
     const riskLines = atRiskTasks.length > 0
       ? atRiskTasks.map((t) => `• ⚠️ [${t.key}] ${t.title} (Requer atenção)`).join('\n')
       : '• Nenhum impedimento crítico relatado hoje.';
@@ -209,6 +213,7 @@ ${riskLines}
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {inProgressTasks.map((task) => {
                   const assignee = members.find((m) => m.id === task.assigneeId);
+                  const { estimatedHours, loggedHours } = getTaskHours(task);
                   return (
                     <div
                       key={task.id}
@@ -218,9 +223,9 @@ ${riskLines}
                       <div className="flex items-center justify-between text-[11px] mb-1">
                         <span className="font-mono font-semibold text-slate-500">{task.key}</span>
                         <div className="flex items-center gap-1 font-mono text-[10px]">
-                          <span>{formatHours(task.loggedHours)}</span>
+                          <span>{formatHours(loggedHours)}</span>
                           <span className="text-slate-400">/</span>
-                          <span className="text-slate-500">{formatHours(task.estimatedHours)}</span>
+                          <span className="text-slate-500">{formatHours(estimatedHours)}</span>
                         </div>
                       </div>
                       <p className="text-xs font-medium text-slate-800 dark:text-slate-200 line-clamp-1">{task.title}</p>
@@ -256,7 +261,8 @@ ${riskLines}
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {atRiskTasks.map((task) => {
                   const assignee = members.find((m) => m.id === task.assigneeId);
-                  const isOverrun = task.estimatedHours > 0 && task.loggedHours > task.estimatedHours;
+                  const { estimatedHours, loggedHours } = getTaskHours(task);
+                  const isOverrun = estimatedHours > 0 && loggedHours > estimatedHours;
                   return (
                     <div
                       key={task.id}
@@ -267,7 +273,7 @@ ${riskLines}
                         <span className="font-mono font-semibold text-rose-700 dark:text-rose-400">{task.key}</span>
                         {isOverrun && (
                           <span className="text-[9px] font-bold text-rose-600 bg-rose-100 dark:bg-rose-900/60 px-1 py-0.2 rounded">
-                            +{Number((task.loggedHours - task.estimatedHours).toFixed(1))}h acima
+                            +{Number((loggedHours - estimatedHours).toFixed(1))}h acima
                           </span>
                         )}
                       </div>
@@ -304,6 +310,7 @@ ${riskLines}
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {doneTasks.map((task) => {
                   const assignee = members.find((m) => m.id === task.assigneeId);
+                  const { loggedHours } = getTaskHours(task);
                   return (
                     <div
                       key={task.id}
@@ -312,7 +319,7 @@ ${riskLines}
                     >
                       <div className="flex items-center justify-between text-[11px] mb-1">
                         <span className="font-mono font-semibold text-slate-500">{task.key}</span>
-                        <span className="text-[10px] font-mono text-emerald-600">{task.loggedHours}h gastas</span>
+                        <span className="text-[10px] font-mono text-emerald-600">{loggedHours}h gastas</span>
                       </div>
                       <p className="text-xs font-medium text-slate-800 dark:text-slate-200 line-clamp-1">{task.title}</p>
                     </div>

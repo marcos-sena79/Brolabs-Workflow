@@ -12,7 +12,7 @@ import {
   Link2,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate, getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
+import { formatHours, formatDate, getTaskHours, getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 
 export const BacklogView: React.FC = () => {
@@ -38,10 +38,10 @@ export const BacklogView: React.FC = () => {
   const backlogTasks = boardTasks.filter((t) => t.statusId === 'col-backlog');
 
   const sprintPoints = sprintTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0);
-  const sprintHours = sprintTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
+  const sprintHours = sprintTasks.reduce((acc, t) => acc + getTaskHours(t).estimatedHours, 0);
 
   const backlogPoints = backlogTasks.reduce((acc, t) => acc + (t.storyPoints || 0), 0);
-  const backlogHours = backlogTasks.reduce((acc, t) => acc + (t.estimatedHours || 0), 0);
+  const backlogHours = backlogTasks.reduce((acc, t) => acc + getTaskHours(t).estimatedHours, 0);
 
   const handleQuickAdd = (targetStatus: string, e: React.FormEvent) => {
     e.preventDefault();
@@ -162,7 +162,7 @@ export const BacklogView: React.FC = () => {
                   <div className="flex flex-wrap items-center gap-2 sm:gap-3 sm:shrink-0">
                     <PriorityIcon priority={task.priority} />
                     <span className="font-mono text-slate-600 dark:text-slate-400 text-[11px]">
-                      {task.storyPoints}pt · {formatHours(task.estimatedHours)}
+                      {task.storyPoints}pt · {formatHours(getTaskHours(task).estimatedHours)}
                     </span>
                     <span className="text-[10px] px-2 py-0.5 rounded font-medium bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
                       {col?.title}
@@ -236,7 +236,7 @@ export const BacklogView: React.FC = () => {
                         Puxar para Sprint
                       </button>
                     )}
-                    <span className="font-mono text-slate-400 text-[11px]">{formatHours(task.estimatedHours)}</span>
+                    <span className="font-mono text-slate-400 text-[11px]">{formatHours(getTaskHours(task).estimatedHours)}</span>
                   </div>
                 </div>
               );

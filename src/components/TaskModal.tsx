@@ -43,12 +43,19 @@ import {
   formatHours,
   formatDate,
   formatRelativeTime,
+  getTaskHours,
   getPriorityLabel,
   getIssueTypeLabel,
   getTodoColumnId,
   isTaskDone,
 } from '../utils/agileHelpers';
 import { taskAssigneeIds } from '../utils/taskAssignees';
+import {
+  canChangeTaskIssueType,
+  canSetTaskParent,
+  getAllowedChildType,
+  getAllowedParentType,
+} from '../utils/taskHierarchy';
 
 export const TaskModal: React.FC = () => {
   const {
@@ -193,6 +200,26 @@ export const TaskModal: React.FC = () => {
 
   if (!task) return null;
 
+  const allowedParentType = getAllowedParentType(task.issueType);
+  const parentCandidates = allowedParentType
+    ? tasks.filter(
+        (candidate) =>
+          candidate.boardId === task.boardId &&
+          candidate.issueType === allowedParentType &&
+          canSetTaskParent(task, candidate, tasks)
+      )
+    : [];
+  const childCardType = getAllowedChildType(task.issueType);
+  const childCards = childCardType
+    ? tasks.filter(
+        (candidate) =>
+          candidate.boardId === task.boardId &&
+          candidate.parentId === task.id &&
+          candidate.issueType === childCardType &&
+          canSetTaskParent(candidate, task, tasks)
+      )
+    : [];
+
   const runAnalysis = async () => {
     setAiRunning(true);
     setAiError(null);
@@ -295,8 +322,7 @@ export const TaskModal: React.FC = () => {
   const completedSubtasks = task.subtasks?.filter((s) => s.completed).length || 0;
   const subtaskPercent = totalSubtasks > 0 ? Math.round((completedSubtasks / totalSubtasks) * 100) : 0;
 
-  const estimated = task.estimatedHours || 0;
-  const logged = task.loggedHours || 0;
+  const { estimatedHours: estimated, loggedHours: logged } = getTaskHours(task);
   const isOverrun = estimated > 0 && logged > estimated;
   const overrunHours = isOverrun ? Number((logged - estimated).toFixed(1)) : 0;
 
@@ -497,10 +523,10 @@ export const TaskModal: React.FC = () => {
                 onChange={(e) => updateTask(task.id, { issueType: e.target.value as IssueType })}
                 className="text-xs font-semibold bg-transparent border-none text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
               >
-                <option value="story">História</option>
-                <option value="task">Tarefa</option>
-                <option value="bug">Bug</option>
-                <option value="epic">Épico</option>
+                <option value="story" disabled={!canChangeTaskIssueType(task, 'story', tasks)}>História</option>
+                <option value="task" disabled={!canChangeTaskIssueType(task, 'task', tasks)}>Tarefa</option>
+                <option value="bug" disabled={!canChangeTaskIssueType(task, 'bug', tasks)}>Bug</option>
+                <option value="epic" disabled={!canChangeTaskIssueType(task, 'epic', tasks)}>Épico</option>
               </select>
             </div>
 
@@ -804,7 +830,8 @@ export const TaskModal: React.FC = () => {
               </div>
             )}
 
-            {/* SUB-TAREFAS (SUBTASKS) */}
+            {task.issueType === 'task' && (
+              <>
             {/* SUB-TAREFAS (SUBTASKS) */}
             <div className="bg-slate-50/50 dark:bg-slate-800/30 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
               <div className="flex items-center justify-between flex-wrap gap-2">
@@ -1015,6 +1042,47 @@ export const TaskModal: React.FC = () => {
                 </button>
               </form>
             </div>
+              </>
+            )}
+
+            {childCardType && (
+              <div className="bg-slate-50/50 dark:bg-slate-800/30 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
+                <div className="flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-indigo-600" />
+                  <span className="text-xs font-bold text-slate-900 dark:text-slate-100">
+                    {task.issueType === 'bug' ? 'Sub-bugs' : `${getIssueTypeLabel(childCardType)}s`} ({childCards.length})
+                  </span>
+                </div>
+                {childCards.length > 0 ? (
+                  <div className="space-y-1.5">
+                    {childCards.map((child) => {
+                      const childColumn = currentBoard.columns.find((column) => column.id === child.statusId);
+                      return (
+                        <button
+                          key={child.id}
+                          type="button"
+                          onClick={() => setSelectedTaskModalId(child.id)}
+                          className="w-full flex items-center justify-between gap-3 p-2 rounded-lg border border-slate-200 dark:border-slate-700/60 bg-white dark:bg-slate-800 hover:border-indigo-400 text-left transition-colors"
+                        >
+                          <span className="flex items-center gap-2 min-w-0">
+                            <IssueTypeIcon type={child.issueType} className="w-3.5 h-3.5 shrink-0" />
+                            <span className="font-mono text-[10px] font-bold text-slate-500 shrink-0">{child.key}</span>
+                            <span className="text-xs font-medium text-slate-800 dark:text-slate-200 truncate">
+                              {child.title}
+                            </span>
+                          </span>
+                          <span className="text-[10px] text-slate-500 shrink-0">{childColumn?.title || 'Sem status'}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p className="text-center py-3 text-xs text-slate-400 dark:text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg">
+                    Nenhum card filho cadastrado.
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* DEPENDÊNCIAS E BLOQUEIOS */}
             <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
@@ -1736,12 +1804,18 @@ export const TaskModal: React.FC = () => {
                       type="number"
                       step="0.5"
                       min="0"
-                      value={task.estimatedHours}
+                      value={estimated}
                       onChange={(e) => updateTask(task.id, { estimatedHours: parseFloat(e.target.value) || 0 })}
                       className="w-16 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                      title={task.subtasks && task.subtasks.length > 0 ? `Próprio: ${task.estimatedHours}h + Subtarefas: ${(estimated - task.estimatedHours).toFixed(1)}h` : undefined}
                     />
                     <span>h</span>
                   </div>
+                  {task.subtasks && task.subtasks.length > 0 && (
+                    <span className="text-[9px] text-slate-400 italic">
+                      ({task.estimatedHours}h próprio + {(estimated - task.estimatedHours).toFixed(1)}h sub)
+                    </span>
+                  )}
                 </div>
 
                 <div>
@@ -1749,6 +1823,11 @@ export const TaskModal: React.FC = () => {
                   <p className={`font-mono font-bold ${isOverrun ? 'text-rose-600' : 'text-slate-800 dark:text-slate-100'}`}>
                     {formatHours(logged)}
                   </p>
+                  {task.subtasks && task.subtasks.length > 0 && (
+                    <span className="text-[9px] text-slate-400 italic">
+                      ({task.loggedHours}h próprio + {(logged - task.loggedHours).toFixed(1)}h sub)
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -1859,31 +1938,30 @@ export const TaskModal: React.FC = () => {
                 </select>
               </div>
 
-              {/* História pai (Onda 2 — 2A) */}
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                  História pai
-                </label>
-                <select
-                  value={task.parentId || ''}
-                  onChange={(e) => updateTask(task.id, { parentId: e.target.value || null })}
-                  className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-                >
-                  <option value="">Nenhuma (tarefa avulsa)</option>
-                  {tasks
-                    .filter((t) => t.boardId === task.boardId && t.issueType === 'story' && t.id !== task.id)
-                    .map((t) => (
-                      <option key={t.id} value={t.id}>
-                        [{t.key}] {t.title.length > 55 ? `${t.title.substring(0, 55)}...` : t.title}
+              {allowedParentType && (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    {getIssueTypeLabel(allowedParentType)} pai
+                  </label>
+                  <select
+                    value={task.parentId || ''}
+                    onChange={(e) => updateTask(task.id, { parentId: e.target.value || null })}
+                    className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                  >
+                    <option value="">Sem {getIssueTypeLabel(allowedParentType).toLowerCase()} pai</option>
+                    {parentCandidates.map((candidate) => (
+                      <option key={candidate.id} value={candidate.id}>
+                        [{candidate.key}] {candidate.title.length > 55 ? `${candidate.title.substring(0, 55)}...` : candidate.title}
                       </option>
                     ))}
-                </select>
-                {task.parentId && !tasks.some((t) => t.id === task.parentId && t.issueType === 'story') && (
-                  <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
-                    História pai não encontrada no quadro (remova o vínculo)
-                  </p>
-                )}
-              </div>
+                  </select>
+                  {task.parentId && !parentCandidates.some((candidate) => candidate.id === task.parentId) && (
+                    <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1">
+                      Vínculo pai inválido ou inexistente; selecione um pai compatível ou remova o vínculo.
+                    </p>
+                  )}
+                </div>
+              )}
 
               {/* Story Points */}
               <div className="grid grid-cols-2 gap-2">

@@ -27,6 +27,10 @@ describe('parentId — História pai (Onda 2, 2A)', () => {
     expect(() => taskCreateSchema.parse({ ...baseCreate, parentId: '' })).toThrow();
   });
 
+  it('taskCreateSchema rejeita tipo de card fora da hierarquia conhecida', () => {
+    expect(() => taskCreateSchema.parse({ ...baseCreate, issueType: 'subtask' })).toThrow();
+  });
+
   it('taskUpdateSchema aceita string (vincular)', () => {
     expect(taskUpdateSchema.parse({ parentId: 'task-story-1' }).parentId).toBe('task-story-1');
   });
@@ -41,6 +45,11 @@ describe('parentId — História pai (Onda 2, 2A)', () => {
 
   it('taskUpdateSchema sem parentId continua válido (delta parcial)', () => {
     expect(taskUpdateSchema.parse({ title: 'Novo' }).parentId).toBeUndefined();
+  });
+
+  it('taskUpdateSchema valida alterações de tipo', () => {
+    expect(taskUpdateSchema.parse({ issueType: 'bug' }).issueType).toBe('bug');
+    expect(() => taskUpdateSchema.parse({ issueType: 'subtask' })).toThrow();
   });
 });
 

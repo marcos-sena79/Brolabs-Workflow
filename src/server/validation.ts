@@ -141,7 +141,7 @@ export const taskCreateSchema = z
     key: z.string().trim().min(1).max(50),
     boardId: idSchema,
     title: z.string().trim().min(1).max(500),
-    issueType: z.string().min(1).max(50),
+    issueType: z.enum(['story', 'task', 'bug', 'epic']),
     priority: z.string().min(1).max(50),
     statusId: z.string().min(1).max(100),
     assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
@@ -152,6 +152,7 @@ export const taskCreateSchema = z
 export const taskUpdateSchema = z
   .object({
     title: z.string().trim().min(1).max(500).optional(),
+    issueType: z.enum(['story', 'task', 'bug', 'epic']).optional(),
     statusId: z.string().min(1).max(100).optional(),
     assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
     parentId: z.string().trim().min(1).max(100).nullable().optional(),
