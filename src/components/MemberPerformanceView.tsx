@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { Member } from '../types';
-import { formatHours, formatDate, getTaskHoursForMember, isTaskDone } from '../utils/agileHelpers';
+import { formatHours, formatDate, getTaskHoursForMember, isManualWorklog, isTaskDone } from '../utils/agileHelpers';
 import { taskHasAssignee } from '../utils/taskAssignees';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 import { api } from '../services/api';
@@ -80,8 +80,9 @@ export const MemberPerformanceView: React.FC = () => {
     const memberWorklogs = boardTasks
       .flatMap((t) => t.worklogs || [])
       .filter((wl) => wl.memberId === member.id);
+    // Registros automáticos de sub-tarefa concluída já contam via subtask.loggedHours abaixo
     const totalWorklogHours =
-      memberWorklogs.reduce((acc, wl) => acc + wl.hours, 0) +
+      memberWorklogs.filter(isManualWorklog).reduce((acc, wl) => acc + wl.hours, 0) +
       memberTasks.reduce(
         (acc, task) =>
           acc +

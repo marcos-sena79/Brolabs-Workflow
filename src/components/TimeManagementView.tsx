@@ -12,7 +12,7 @@ import {
   Search,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
-import { formatHours, formatDate, getTaskHours, isTaskDone } from '../utils/agileHelpers';
+import { collectSubtreeIds, formatHours, formatDate, getTaskHours, isTaskDone } from '../utils/agileHelpers';
 import { taskAssigneeIds, taskHasAssignee } from '../utils/taskAssignees';
 import { IssueTypeIcon } from './AgileIcons';
 
@@ -214,7 +214,12 @@ export const TimeManagementView: React.FC = () => {
 
         <div className="space-y-3">
           {currentBoard.epics?.map((epic) => {
-            const epicTasks = boardTasks.filter((t) => t.epicId === epic.id);
+            // Cards do épico = card-épico (mesmo id do catálogo) + vinculados por epicId + toda a hierarquia abaixo
+            const subtree = collectSubtreeIds(
+              [epic.id, ...boardTasks.filter((t) => t.epicId === epic.id).map((t) => t.id)],
+              boardTasks
+            );
+            const epicTasks = boardTasks.filter((t) => subtree.has(t.id));
             const epicEst = epicTasks.reduce((acc, t) => acc + getTaskHours(t).estimatedHours, 0);
             const epicLog = epicTasks.reduce((acc, t) => acc + getTaskHours(t).loggedHours, 0);
             const pct = epicEst > 0 ? Math.min(100, Math.round((epicLog / epicEst) * 100)) : 0;

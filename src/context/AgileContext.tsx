@@ -29,7 +29,7 @@ import { api } from '../services/api';
 import { normalizeAssigneeIds, taskHasAssignee } from '../utils/taskAssignees';
 import { useAuth } from './AuthContext';
 import { useTheme } from './ThemeContext';
-import { getTaskHours, getTodoColumnId, isTaskDone } from '../utils/agileHelpers';
+import { getTaskHours, getTodoColumnId, hasManualEstimate, isTaskDone } from '../utils/agileHelpers';
 import { playSound, SoundEvent } from '../utils/sound';
 import { EMPTY_BOARD, EMPTY_MEMBER, resolveInitialState } from '../utils/initialDataFlow';
 
@@ -900,7 +900,8 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       reporterId: currentUser.id,
       epicId: taskData.epicId,
       parentId: taskData.parentId || null,
-      estimatedHours: taskData.estimatedHours || 0,
+      // Épico/História/Tarefa: estimativa vem só das sub-tarefas (apenas Bug aceita valor próprio)
+      estimatedHours: hasManualEstimate(taskData.issueType || 'task') ? taskData.estimatedHours || 0 : 0,
       loggedHours: 0,
       storyPoints: taskData.storyPoints || 1,
       dueDate: taskData.dueDate || new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
@@ -923,7 +924,9 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       taskTitle: newTask.title,
       memberId: currentUser.id,
       memberName: currentUser.name,
-      details: `Criou a tarefa com prioridade ${newTask.priority} e estimativa de ${newTask.estimatedHours}h`,
+      details: hasManualEstimate(newTask.issueType)
+        ? `Criou a tarefa com prioridade ${newTask.priority} e estimativa de ${newTask.estimatedHours}h`
+        : `Criou a tarefa com prioridade ${newTask.priority} (estimativa calculada pelas sub-tarefas)`,
     });
 
     return newTask;
@@ -1167,33 +1170,32 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
             updatedAt: new Date().toISOString(),
           };
 
-          // If completing a subtask, create a worklog entry for the parent task
+          // As horas da sub-tarefa ficam em `subtask.loggedHours` (é dali que o Realizado
+          // é calculado). O worklog abaixo é só histórico (source 'subtask') e NÃO soma
+          // em `task.loggedHours` — que guarda apenas horas lançadas manualmente.
           const updatedSubtask = updatedSubtasks.find((s) => s.id === subtaskId);
+          let updatedWorklogs = t.worklogs;
           if (updatedSubtask && updatedSubtask.completed && sub && !sub.completed) {
-            // Only add worklog when transitioning from incomplete to complete
             const newLog: WorkLog = {
               id: `wl-${Date.now()}`,
               taskId,
               memberId: currentUser.id,
-              hours: Number(updatedSubtask.estimatedHours.toFixed(1)),
+              hours: Number((updatedSubtask.loggedHours || 0).toFixed(1)),
               date: new Date().toISOString().split('T')[0],
               comment: `Sub-tarefa concluída: ${sub.title}`,
               createdAt: new Date().toISOString(),
+              source: 'subtask',
+              subtaskId,
             };
-            const updatedWorklogs = [newLog, ...t.worklogs];
-            const newLoggedHours = Number((t.loggedHours + updatedSubtask.estimatedHours).toFixed(1));
+            updatedWorklogs = [newLog, ...t.worklogs];
+          } else if (updatedSubtask && !updatedSubtask.completed && sub?.completed) {
+            // Reabriu: remove o registro automático daquela sub-tarefa
+            updatedWorklogs = t.worklogs.filter((wl) => !(wl.source === 'subtask' && wl.subtaskId === subtaskId));
+          }
 
-            api.updateTask(taskId, {
-              subtasks: updatedSubtasks,
-              worklogs: updatedWorklogs,
-              loggedHours: newLoggedHours,
-            }).catch(console.error);
-
-            return {
-              ...updatedTask,
-              worklogs: updatedWorklogs,
-              loggedHours: newLoggedHours,
-            };
+          if (updatedWorklogs !== t.worklogs) {
+            api.updateTask(taskId, { subtasks: updatedSubtasks, worklogs: updatedWorklogs }).catch(console.error);
+            return { ...updatedTask, worklogs: updatedWorklogs };
           }
 
           api.updateTask(taskId, { subtasks: updatedSubtasks }).catch(console.error);
@@ -1393,6 +1395,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       date: date || new Date().toISOString().split('T')[0],
       comment: comment || 'Apontamento de desenvolvimento',
       createdAt: new Date().toISOString(),
+      source: 'manual',
     };
 
     setTasks((prev) =>

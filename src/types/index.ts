@@ -34,6 +34,13 @@ export interface WorkLog {
   date: string;
   comment: string;
   createdAt: string;
+  /**
+   * 'manual' = horas lançadas manualmente (somam no Realizado do card).
+   * 'subtask' = registro histórico da conclusão de uma sub-tarefa; as horas já
+   * contam em `subtask.loggedHours`, então NÃO entram de novo no Realizado.
+   */
+  source?: 'manual' | 'subtask';
+  subtaskId?: string;
 }
 
 export interface TaskComment {

@@ -6,7 +6,7 @@
  * nos testes em Node. Não executa nada do HTML: apenas lê tags, atributos e texto.
  */
 
-interface HNode {
+export interface HNode {
   tag: string | null; // null = nó de texto
   attrs: Record<string, string>;
   children: HNode[];
@@ -45,7 +45,7 @@ const parseAttrs = (raw: string): Record<string, string> => {
   return attrs;
 };
 
-const parseHtml = (html: string): HNode => {
+export const parseHtml = (html: string): HNode => {
   const root: HNode = { tag: 'root', attrs: {}, children: [], text: '' };
   const stack: HNode[] = [root];
   const re = /<!--[\s\S]*?-->|<![^>]*>|<\/\s*([a-zA-Z][\w:.-]*)\s*>|<([a-zA-Z][\w:.-]*)((?:"[^"]*"|'[^']*'|[^'">])*)>|[^<]+|</g;

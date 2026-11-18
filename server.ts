@@ -9,6 +9,7 @@ import cookieParser from 'cookie-parser';
 import { pool, query } from './src/server/db';
 import { normalizeAssigneeIds, taskAssigneeIds } from './src/utils/taskAssignees';
 import { canSetTaskParent, type TaskHierarchyNode } from './src/utils/taskHierarchy';
+import { hasManualEstimate } from './src/utils/agileHelpers';
 import { initializeDatabase, seedDatabase } from './src/server/initDb';
 import {
   authenticateToken,
@@ -1033,7 +1034,8 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
         assigneeIds[0] || '',
         t.reporterId || '',
         t.epicId || null,
-        t.estimatedHours || 0,
+        // Épico/História/Tarefa: estimativa é calculada pelas sub-tarefas (só Bug aceita valor próprio)
+        hasManualEstimate(t.issueType) ? t.estimatedHours || 0 : 0,
         t.loggedHours || 0,
         t.storyPoints || 0,
         t.dueDate || '',
@@ -1289,7 +1291,7 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
         merged.assigneeId,
         merged.reporterId,
         merged.epicId || null,
-        merged.estimatedHours,
+        hasManualEstimate(merged.issueType) ? merged.estimatedHours || 0 : 0,
         merged.loggedHours,
         merged.storyPoints,
         merged.dueDate,
@@ -2569,7 +2571,7 @@ app.post('/api/webhooks/incoming', async (req, res) => {
           assigneeIds[0] || '',
           '',
           body.task?.epicId || null,
-          Number(body.task?.estimatedHours) || 0,
+          hasManualEstimate(issueType) ? Number(body.task?.estimatedHours) || 0 : 0,
           0,
           Number(body.task?.storyPoints) || 0,
           dueDate,

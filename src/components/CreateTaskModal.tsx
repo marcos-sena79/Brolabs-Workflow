@@ -3,7 +3,7 @@ import { X, Plus, Sparkles } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { Epic, IssueType, Priority } from '../types';
 import { IssueTypeIcon } from './AgileIcons';
-import { getIssueTypeLabel, getTodoColumnId } from '../utils/agileHelpers';
+import { getIssueTypeLabel, getTodoColumnId, hasManualEstimate } from '../utils/agileHelpers';
 import { normalizeAssigneeIds } from '../utils/taskAssignees';
 import { canSetTaskParent, getAllowedParentType } from '../utils/taskHierarchy';
 
@@ -91,7 +91,7 @@ export const CreateTaskModal: React.FC = () => {
       assigneeIds: normalizeAssigneeIds(assigneeIds, [currentUser.id]),
       epicId: chosenEpicId || undefined,
       parentId: parentId || undefined,
-      estimatedHours: parseFloat(estimatedHours) || 0,
+      estimatedHours: hasManualEstimate(issueType) ? parseFloat(estimatedHours) || 0 : 0,
       storyPoints: parseInt(storyPoints) || 0,
       dueDate,
       tags,
@@ -124,7 +124,11 @@ export const CreateTaskModal: React.FC = () => {
         .map((l) => l.trim())
         .filter(Boolean);
       subtaskLines.forEach((line) => {
-        addSubtask(created.id, line, 2, normalizeAssigneeIds(assigneeIds, [currentUser.id]));
+        // Aceita horas no fim da linha: "Criar schema | 3" ou "Criar schema - 3h" (padrão 2h)
+        const m = /^(.*?)\s*(?:\||-|–)\s*(\d+(?:[.,]\d+)?)\s*h?$/i.exec(line);
+        const subTitle = m && m[1].trim() ? m[1].trim() : line;
+        const hours = m && m[1].trim() ? parseFloat(m[2].replace(',', '.')) : 2;
+        addSubtask(created.id, subTitle, hours, normalizeAssigneeIds(assigneeIds, [currentUser.id]));
       });
     }
 
@@ -417,20 +421,33 @@ export const CreateTaskModal: React.FC = () => {
 
           {/* Time Tracking (Estimativa) & Due Date */}
           <div className="grid grid-cols-3 gap-3">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Horas Estimadas *
-              </label>
-              <input
-                type="number"
-                step="0.5"
-                min="0.5"
-                required
-                value={estimatedHours}
-                onChange={(e) => setEstimatedHours(e.target.value)}
-                className="w-full text-xs font-mono px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              />
-            </div>
+            {hasManualEstimate(issueType) ? (
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                  Horas Estimadas *
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  min="0.5"
+                  required
+                  value={estimatedHours}
+                  onChange={(e) => setEstimatedHours(e.target.value)}
+                  className="w-full text-xs font-mono px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            ) : (
+              <div>
+                <span className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Horas Estimadas</span>
+                <p className="text-[11px] leading-snug text-slate-500 dark:text-slate-400 px-3 py-1.5 rounded-md border border-dashed border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                  {issueType === 'task'
+                    ? 'Calculada pela soma das sub-tarefas.'
+                    : issueType === 'story'
+                      ? 'Calculada pela soma das tarefas da história.'
+                      : 'Calculada pela soma das histórias do épico.'}
+                </p>
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -526,11 +543,11 @@ export const CreateTaskModal: React.FC = () => {
           {issueType === 'task' && (
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                Sub-tarefas Iniciais (Uma por linha - Opcional)
+                Sub-tarefas Iniciais (uma por linha, horas no fim — opcional)
               </label>
               <textarea
-                rows={2}
-                placeholder="Ex:&#10;Criar schema do banco&#10;Implementar controller REST&#10;Escrever testes unitários"
+                rows={3}
+                placeholder="Ex:&#10;Criar schema do banco | 3&#10;Implementar controller REST | 5&#10;Escrever testes unitários (sem horas = 2h)"
                 value={quickSubtasksInput}
                 onChange={(e) => setQuickSubtasksInput(e.target.value)}
                 className="w-full text-xs font-mono px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"

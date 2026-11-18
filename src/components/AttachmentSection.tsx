@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Paperclip, UploadCloud, Trash2, Download, FileText, File as FileIcon, Image as ImageIcon } from 'lucide-react';
+import { Paperclip, UploadCloud, Trash2, Download, Eye, FileText, File as FileIcon, Image as ImageIcon } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { api } from '../services/api';
-import { Task } from '../types';
+import { Task, TaskAttachment } from '../types';
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -16,7 +16,11 @@ function AttachmentIcon({ mimeType, className }: { mimeType: string; className?:
   return <FileIcon className={className} />;
 }
 
-export const AttachmentSection: React.FC<{ task: Task }> = ({ task }) => {
+export const AttachmentSection: React.FC<{
+  task: Task;
+  /** Abre o anexo no visualizador interno; sem ele, o clique baixa o arquivo. */
+  onOpen?: (attachment: TaskAttachment) => void;
+}> = ({ task, onOpen }) => {
   const {
     attachmentsByTask,
     isAttachmentsLoading,
@@ -152,14 +156,28 @@ export const AttachmentSection: React.FC<{ task: Task }> = ({ task }) => {
               mimeType={att.mimeType}
               className="w-4 h-4 text-slate-400 shrink-0"
             />
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-slate-700 dark:text-slate-200 truncate">
+            <button
+              type="button"
+              onClick={() => (onOpen ? onOpen(att) : handleDownload(att.id))}
+              title="Visualizar"
+              className="flex-1 min-w-0 text-left rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500/40"
+            >
+              <p className="text-xs font-medium text-slate-700 dark:text-slate-200 truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 group-hover:underline">
                 {att.originalName}
               </p>
               <p className="text-[10px] text-slate-400">
                 {formatBytes(att.sizeBytes)} · {new Date(att.createdAt).toLocaleDateString('pt-BR')}
               </p>
-            </div>
+            </button>
+            {onOpen && (
+              <button
+                onClick={() => onOpen(att)}
+                title="Visualizar"
+                className="p-1.5 text-slate-400 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+              >
+                <Eye className="w-3.5 h-3.5" />
+              </button>
+            )}
             <button
               onClick={() => handleDownload(att.id)}
               title="Baixar"

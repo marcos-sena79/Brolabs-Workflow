@@ -1,4 +1,7 @@
-import { Board, IssueType, Priority, Task } from '../types';
+import { Board, IssueType, Priority, Task, WorkLog } from '../types';
+
+/** Worklog de horas lançadas manualmente (não o registro automático de sub-tarefa concluída). */
+export const isManualWorklog = (wl: Pick<WorkLog, 'source'>): boolean => wl.source !== 'subtask';
 import { taskHasAssignee } from './taskAssignees';
 
 export interface TaskHours {
@@ -6,14 +9,34 @@ export interface TaskHours {
   loggedHours: number;
 }
 
-export const getTaskHours = (task: Pick<Task, 'estimatedHours' | 'loggedHours' | 'subtasks'>): TaskHours => {
+/**
+ * Só Bug aceita estimativa digitada. Épico, História e Tarefa têm a estimativa
+ * calculada exclusivamente a partir das sub-tarefas (e dos cards filhos).
+ */
+export const hasManualEstimate = (issueType: IssueType | string | undefined): boolean => issueType === 'bug';
+
+/** Estimativa própria válida do card (0 para tipos calculados). */
+export const getOwnEstimate = (task: Pick<Task, 'issueType' | 'estimatedHours'>): number =>
+  hasManualEstimate(task.issueType) ? task.estimatedHours || 0 : 0;
+
+type HoursInput = Pick<Task, 'issueType' | 'estimatedHours' | 'loggedHours' | 'subtasks'>;
+
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
+/**
+ * Horas do card no seu próprio nível (sem somar cards filhos):
+ * - Estimado = Σ sub-tarefas (+ estimativa própria, só para Bug)
+ * - Realizado = horas lançadas manualmente no card + Σ realizado das sub-tarefas
+ * Use para totais de quadro/relatórios, onde cada card já entra na soma.
+ */
+export const getTaskHours = (task: HoursInput): TaskHours => {
   return (task.subtasks || []).reduce(
     (hours, subtask) => ({
-      estimatedHours: hours.estimatedHours + (subtask.estimatedHours || 0),
-      loggedHours: hours.loggedHours + (subtask.loggedHours || 0),
+      estimatedHours: round1(hours.estimatedHours + (subtask.estimatedHours || 0)),
+      loggedHours: round1(hours.loggedHours + (subtask.loggedHours || 0)),
     }),
     {
-      estimatedHours: task.estimatedHours || 0,
+      estimatedHours: getOwnEstimate(task),
       loggedHours: task.loggedHours || 0,
     }
   );
@@ -25,15 +48,101 @@ export const getTaskHoursForMember = (task: Task, memberId: string): TaskHours =
     (hours, subtask) => {
       if (!taskHasAssignee(subtask, memberId)) return hours;
       return {
-        estimatedHours: hours.estimatedHours + (subtask.estimatedHours || 0),
-        loggedHours: hours.loggedHours + (subtask.loggedHours || 0),
+        estimatedHours: round1(hours.estimatedHours + (subtask.estimatedHours || 0)),
+        loggedHours: round1(hours.loggedHours + (subtask.loggedHours || 0)),
       };
     },
     {
-      estimatedHours: memberOwnsTask ? task.estimatedHours || 0 : 0,
+      estimatedHours: memberOwnsTask ? getOwnEstimate(task) : 0,
       loggedHours: memberOwnsTask ? task.loggedHours || 0 : 0,
     }
   );
+};
+
+export interface RollupHours extends TaskHours {
+  /** Estimativa própria (só Bug) e horas lançadas manualmente no próprio card. */
+  own: TaskHours;
+  /** Soma das sub-tarefas do próprio card. */
+  subtasks: TaskHours;
+  /** Soma dos cards filhos (História → Tarefas, Épico → Histórias…), já consolidados. */
+  children: TaskHours & { count: number };
+}
+
+type RollupInput = HoursInput & Pick<Task, 'id' | 'parentId'>;
+
+/**
+ * Horas consolidadas na hierarquia: o card + suas sub-tarefas + todos os
+ * descendentes (via parentId). Use para exibir Épico/História/Tarefa.
+ */
+export const getRollupHours = (task: RollupInput, allTasks: RollupInput[]): RollupHours => {
+  const childrenOf = new Map<string, RollupInput[]>();
+  for (const t of allTasks) {
+    if (!t.parentId) continue;
+    const list = childrenOf.get(t.parentId) || [];
+    list.push(t);
+    childrenOf.set(t.parentId, list);
+  }
+
+  const visited = new Set<string>();
+  const walk = (node: RollupInput): TaskHours => {
+    if (visited.has(node.id)) return { estimatedHours: 0, loggedHours: 0 };
+    visited.add(node.id);
+    const own = getTaskHours(node);
+    return (childrenOf.get(node.id) || []).reduce((acc, child) => {
+      const h = walk(child);
+      return {
+        estimatedHours: round1(acc.estimatedHours + h.estimatedHours),
+        loggedHours: round1(acc.loggedHours + h.loggedHours),
+      };
+    }, own);
+  };
+
+  visited.add(task.id);
+  const directChildren = (childrenOf.get(task.id) || []).filter((c) => c.id !== task.id);
+  const children = directChildren.reduce(
+    (acc, child) => {
+      const h = walk(child);
+      return {
+        estimatedHours: round1(acc.estimatedHours + h.estimatedHours),
+        loggedHours: round1(acc.loggedHours + h.loggedHours),
+        count: acc.count,
+      };
+    },
+    { estimatedHours: 0, loggedHours: 0, count: directChildren.length }
+  );
+
+  const subtasks = (task.subtasks || []).reduce(
+    (acc, s) => ({
+      estimatedHours: round1(acc.estimatedHours + (s.estimatedHours || 0)),
+      loggedHours: round1(acc.loggedHours + (s.loggedHours || 0)),
+    }),
+    { estimatedHours: 0, loggedHours: 0 }
+  );
+  const own = { estimatedHours: getOwnEstimate(task), loggedHours: task.loggedHours || 0 };
+
+  return {
+    estimatedHours: round1(own.estimatedHours + subtasks.estimatedHours + children.estimatedHours),
+    loggedHours: round1(own.loggedHours + subtasks.loggedHours + children.loggedHours),
+    own,
+    subtasks,
+    children,
+  };
+};
+
+/**
+ * Ids dos cards raiz + todos os descendentes (via parentId), sem repetição.
+ * Útil para somar `getTaskHours` (nível próprio) de uma árvore sem contar em dobro.
+ */
+export const collectSubtreeIds = (rootIds: string[], allTasks: Pick<Task, 'id' | 'parentId'>[]): Set<string> => {
+  const ids = new Set<string>();
+  const queue = [...rootIds];
+  while (queue.length) {
+    const id = queue.shift()!;
+    if (ids.has(id)) continue;
+    ids.add(id);
+    for (const t of allTasks) if (t.parentId === id && !ids.has(t.id)) queue.push(t.id);
+  }
+  return ids;
 };
 
 /** Id da coluna de conclusão do quadro (fallback 'col-done' para dados legados). */

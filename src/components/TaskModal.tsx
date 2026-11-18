@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   X,
   Trash2,
@@ -40,11 +40,14 @@ import { api } from '../services/api';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
 import { RichTextEditor } from './RichTextEditor';
 import { AttachmentSection } from './AttachmentSection';
+import { InAppViewer, ViewerItem } from './InAppViewer';
+import { MarkdownLinkHandler } from '../utils/markdown';
 import {
   formatHours,
   formatDate,
   formatRelativeTime,
-  getTaskHours,
+  getRollupHours,
+  hasManualEstimate,
   getPriorityLabel,
   getIssueTypeLabel,
   getTodoColumnId,
@@ -142,6 +145,19 @@ export const TaskModal: React.FC = () => {
   // Commits do GitHub (S4, item 4)
   const [taskCommits, setTaskCommits] = useState<TaskCommit[]>([]);
   const [commitsLoading, setCommitsLoading] = useState(false);
+
+  // Visualizador interno: links, commits e anexos abrem dentro do app
+  const [viewerItem, setViewerItem] = useState<ViewerItem | null>(null);
+  const closeViewer = useCallback(() => setViewerItem(null), []);
+  const openLinkInApp = useCallback(
+    (url: string) => {
+      // Link de commit do GitHub já vinculado à tarefa → painel do commit (o GitHub bloqueia iframe)
+      const sha = /github\.com\/[^/]+\/[^/]+\/commit\/([0-9a-f]{7,40})/i.exec(url)?.[1]?.toLowerCase();
+      const commit = sha ? taskCommits.find((c) => c.sha.toLowerCase().startsWith(sha)) : undefined;
+      setViewerItem(commit ? { kind: 'commit', commit } : { kind: 'link', url });
+    },
+    [taskCommits]
+  );
   const [targetBoardId, setTargetBoardId] = useState('');
   const [targetStatusId, setTargetStatusId] = useState('');
   const [isMovingBoard, setIsMovingBoard] = useState(false);
@@ -323,7 +339,12 @@ export const TaskModal: React.FC = () => {
   const completedSubtasks = task.subtasks?.filter((s) => s.completed).length || 0;
   const subtaskPercent = totalSubtasks > 0 ? Math.round((completedSubtasks / totalSubtasks) * 100) : 0;
 
-  const { estimatedHours: estimated, loggedHours: logged } = getTaskHours(task);
+  // Épico/História/Tarefa: estimativa 100% calculada (sub-tarefas + cards filhos)
+  const manualEstimate = hasManualEstimate(task.issueType);
+  const rollup = getRollupHours(task, tasks);
+  const { estimatedHours: estimated, loggedHours: logged } = rollup;
+  const childLabel =
+    task.issueType === 'epic' ? 'histórias' : task.issueType === 'story' ? 'tarefas' : task.issueType === 'bug' ? 'bugs' : 'filhos';
   const isOverrun = estimated > 0 && logged > estimated;
   const overrunHours = isOverrun ? Number((logged - estimated).toFixed(1)) : 0;
 
@@ -511,6 +532,8 @@ export const TaskModal: React.FC = () => {
   const isTimerRunningOnThis = activeTimer?.taskId === task.id;
 
   return (
+    <MarkdownLinkHandler value={openLinkInApp}>
+    <InAppViewer item={viewerItem} onClose={closeViewer} />
     <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
       <div className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-5xl max-h-[96dvh] sm:max-h-[92vh] flex flex-col overflow-hidden my-auto">
         {/* Top Header */}
@@ -1508,7 +1531,7 @@ export const TaskModal: React.FC = () => {
               </div>
             </div>
 
-            <AttachmentSection task={task} />
+            <AttachmentSection task={task} onOpen={(attachment) => setViewerItem({ kind: 'attachment', taskId: task.id, attachment })} />
 
             {/* COMENTÁRIOS */}
             <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-800">
@@ -1586,7 +1609,17 @@ export const TaskModal: React.FC = () => {
                     {taskCommits.map((c) => (
                       <div
                         key={c.id}
-                        className="flex items-start gap-2 text-[11px] bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-lg px-2.5 py-2"
+                        role="button"
+                        tabIndex={0}
+                        title="Ver detalhes do commit"
+                        onClick={() => setViewerItem({ kind: 'commit', commit: c })}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setViewerItem({ kind: 'commit', commit: c });
+                          }
+                        }}
+                        className="flex items-start gap-2 text-[11px] bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60 rounded-lg px-2.5 py-2 cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-700 hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-colors"
                       >
                         {c.authorAvatar ? (
                           <img src={c.authorAvatar} alt={c.author || ''} className="w-5 h-5 rounded-full mt-0.5" />
@@ -1606,8 +1639,9 @@ export const TaskModal: React.FC = () => {
                             href={c.url}
                             target="_blank"
                             rel="noreferrer"
+                            onClick={(e) => e.stopPropagation()}
                             className="text-slate-400 hover:text-indigo-600 shrink-0"
-                            title="Abrir commit no GitHub"
+                            title="Abrir commit no GitHub (nova aba)"
                           >
                             <ExternalLink className="w-3.5 h-3.5" />
                           </a>
@@ -1682,6 +1716,11 @@ export const TaskModal: React.FC = () => {
                         href={publicLink.url}
                         target="_blank"
                         rel="noreferrer"
+                        onClick={(e) => {
+                          if (!publicLink.url || e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+                          e.preventDefault();
+                          setViewerItem({ kind: 'link', url: publicLink.url, title: 'Visão pública da tarefa' });
+                        }}
                         className="text-[11px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 shrink-0"
                         title="Abrir visão pública"
                       >
@@ -1800,21 +1839,37 @@ export const TaskModal: React.FC = () => {
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div>
                   <span className="text-[10px] text-slate-400">Estimado</span>
-                  <div className="flex items-center gap-1 font-mono font-semibold">
-                    <input
-                      type="number"
-                      step="0.5"
-                      min="0"
-                      value={estimated}
-                      onChange={(e) => updateTask(task.id, { estimatedHours: parseFloat(e.target.value) || 0 })}
-                      className="w-16 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
-                      title={task.subtasks && task.subtasks.length > 0 ? `Próprio: ${task.estimatedHours}h + Subtarefas: ${(estimated - task.estimatedHours).toFixed(1)}h` : undefined}
-                    />
-                    <span>h</span>
-                  </div>
-                  {task.subtasks && task.subtasks.length > 0 && (
-                    <span className="text-[9px] text-slate-400 italic">
-                      ({task.estimatedHours}h próprio + {(estimated - task.estimatedHours).toFixed(1)}h sub)
+                  {manualEstimate ? (
+                    <div className="flex items-center gap-1 font-mono font-semibold">
+                      <input
+                        type="number"
+                        step="0.5"
+                        min="0"
+                        value={task.estimatedHours || 0}
+                        onChange={(e) => updateTask(task.id, { estimatedHours: parseFloat(e.target.value) || 0 })}
+                        className="w-16 px-1.5 py-0.5 rounded border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-xs"
+                        title="Estimativa própria do bug"
+                      />
+                      <span>h</span>
+                    </div>
+                  ) : (
+                    <p
+                      className="font-mono font-bold text-slate-800 dark:text-slate-100"
+                      title="Calculado automaticamente — não editável"
+                    >
+                      {formatHours(estimated)}
+                    </p>
+                  )}
+                  {(rollup.subtasks.estimatedHours > 0 || rollup.children.count > 0) && (
+                    <span className="block text-[9px] text-slate-400 italic leading-tight">
+                      {[
+                        manualEstimate && `${formatHours(rollup.own.estimatedHours)} próprio`,
+                        totalSubtasks > 0 && `${formatHours(rollup.subtasks.estimatedHours)} sub-tarefas`,
+                        rollup.children.count > 0 &&
+                          `${formatHours(rollup.children.estimatedHours)} de ${rollup.children.count} ${childLabel}`,
+                      ]
+                        .filter(Boolean)
+                        .join(' + ')}
                     </span>
                   )}
                 </div>
@@ -1824,13 +1879,30 @@ export const TaskModal: React.FC = () => {
                   <p className={`font-mono font-bold ${isOverrun ? 'text-rose-600' : 'text-slate-800 dark:text-slate-100'}`}>
                     {formatHours(logged)}
                   </p>
-                  {task.subtasks && task.subtasks.length > 0 && (
-                    <span className="text-[9px] text-slate-400 italic">
-                      ({task.loggedHours}h próprio + {(logged - task.loggedHours).toFixed(1)}h sub)
+                  {(totalSubtasks > 0 || rollup.children.count > 0) && (
+                    <span className="block text-[9px] text-slate-400 italic leading-tight">
+                      {[
+                        `${formatHours(rollup.own.loggedHours)} manual`,
+                        totalSubtasks > 0 && `${formatHours(rollup.subtasks.loggedHours)} sub-tarefas`,
+                        rollup.children.count > 0 &&
+                          `${formatHours(rollup.children.loggedHours)} de ${childLabel}`,
+                      ]
+                        .filter(Boolean)
+                        .join(' + ')}
                     </span>
                   )}
                 </div>
               </div>
+
+              {!manualEstimate && estimated === 0 && (
+                <p className="text-[10px] text-slate-500 dark:text-slate-400 leading-snug">
+                  {task.issueType === 'task'
+                    ? 'A estimativa é a soma das sub-tarefas. Adicione sub-tarefas com horas estimadas.'
+                    : task.issueType === 'story'
+                      ? 'A estimativa é a soma das tarefas desta história (e das sub-tarefas delas).'
+                      : 'A estimativa é a soma das histórias deste épico.'}
+                </p>
+              )}
 
               {isOverrun ? (
                 <div className="p-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 rounded text-[11px] text-rose-700 dark:text-rose-300 flex items-center gap-1.5">
@@ -2071,5 +2143,6 @@ export const TaskModal: React.FC = () => {
         </div>
       </div>
     </div>
+    </MarkdownLinkHandler>
   );
 };

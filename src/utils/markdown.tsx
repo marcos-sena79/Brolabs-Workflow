@@ -9,6 +9,35 @@ import React from 'react';
 
 const SAFE_URL = /^(https?:\/\/|mailto:)/i;
 
+/**
+ * Quando fornecido (via <MarkdownLinkHandler>), cliques em links http(s) chamam o
+ * handler em vez de abrir nova aba — usado para abrir links dentro do app.
+ * Ctrl/⌘/Shift/clique do meio mantêm o comportamento padrão do navegador.
+ */
+const LinkHandlerContext = React.createContext<((url: string) => void) | null>(null);
+export const MarkdownLinkHandler = LinkHandlerContext.Provider;
+
+const MdLink: React.FC<{ href: string; className: string; children: React.ReactNode }> = ({ href, className, children }) => {
+  const onOpen = React.useContext(LinkHandlerContext);
+  return (
+    <a
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={className}
+      onClick={(e) => {
+        if (!onOpen || !/^https?:\/\//i.test(href)) return;
+        if (e.ctrlKey || e.metaKey || e.shiftKey || e.button !== 0) return;
+        e.preventDefault();
+        e.stopPropagation();
+        onOpen(href);
+      }}
+    >
+      {children}
+    </a>
+  );
+};
+
 const INLINE_RE =
   /(`[^`\n]+`)|(\*\*[^*\n]+?\*\*)|(~~[^~\n]+?~~)|(\*[^*\n]+?\*)|(_[^_\n]+?_)|(\[[^\]\n]+\]\([^)\s]+\))|(https?:\/\/[^\s<>()]+)/g;
 
@@ -40,18 +69,18 @@ const renderInline = (text: string, keyPrefix: string): React.ReactNode[] => {
       const href = lm[2];
       out.push(
         SAFE_URL.test(href) ? (
-          <a key={key} href={href} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 underline">
+          <MdLink key={key} href={href} className="text-indigo-600 dark:text-indigo-400 underline">
             {renderInline(lm[1], key)}
-          </a>
+          </MdLink>
         ) : (
           tok
         ),
       );
     } else if (m[7]) {
       out.push(
-        <a key={key} href={tok} target="_blank" rel="noopener noreferrer" className="text-indigo-600 dark:text-indigo-400 underline break-all">
+        <MdLink key={key} href={tok} className="text-indigo-600 dark:text-indigo-400 underline break-all">
           {tok}
-        </a>,
+        </MdLink>,
       );
     }
     last = m.index + tok.length;

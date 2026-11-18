@@ -87,7 +87,7 @@ export const KanbanBoard: React.FC = () => {
       priority: 'medium',
       statusId: columnId,
       assigneeId: currentUser.id,
-      estimatedHours: 4,
+      estimatedHours: 0, // calculada pelas sub-tarefas
       storyPoints: 2,
       dueDate: new Date(Date.now() + 7 * 86400000).toISOString().split('T')[0],
     });
