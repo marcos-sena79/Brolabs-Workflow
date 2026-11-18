@@ -14,6 +14,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { MarkdownView } from '../utils/markdown';
+import { htmlToMarkdown } from '../utils/htmlToMarkdown';
 
 interface RichTextEditorProps {
   value: string;
@@ -26,6 +27,8 @@ type Mode = 'edit' | 'preview';
 
 export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange, placeholder, rows = 6 }) => {
   const ref = useRef<HTMLTextAreaElement>(null);
+  /** true quando o usuário usou Ctrl+Shift+V (colar como texto puro). */
+  const plainPasteRef = useRef(false);
   const [mode, setMode] = useState<Mode>(value?.trim() ? 'preview' : 'edit');
 
   const restoreSelection = (start: number, end: number) => {
@@ -112,10 +115,32 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
     { icon: LinkIcon, title: 'Link (Ctrl+K)', action: insertLink },
   ];
 
+  /** Ao colar conteúdo rico (Word, Google Docs, web), converte o HTML para Markdown. */
+  const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const plain = plainPasteRef.current;
+    plainPasteRef.current = false;
+    if (plain) return;
+
+    const html = e.clipboardData.getData('text/html');
+    if (!html) return;
+    const md = htmlToMarkdown(html);
+    if (!md) return;
+
+    e.preventDefault();
+    const el = e.currentTarget;
+    const { selectionStart: s, selectionEnd: end } = el;
+    const text = value || '';
+    onChange(text.slice(0, s) + md + text.slice(end));
+    const caret = s + md.length;
+    restoreSelection(caret, caret);
+  };
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (!(e.ctrlKey || e.metaKey)) return;
     const k = e.key.toLowerCase();
-    if (k === 'b') {
+    if (k === 'v') {
+      plainPasteRef.current = e.shiftKey;
+    } else if (k === 'b') {
       e.preventDefault();
       wrap('**');
     } else if (k === 'i') {
@@ -170,6 +195,8 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          title="Colar mantém a formatação (Word, Google Docs). Ctrl+Shift+V cola como texto puro."
           placeholder={placeholder}
           className="block w-full text-xs text-slate-800 dark:text-slate-200 bg-transparent p-3 focus:bg-white dark:focus:bg-slate-800 focus:outline-none resize-y font-mono leading-relaxed"
         />
