@@ -1,3 +1,4 @@
+import { MarkdownView } from '../utils/markdown';
 import React, { useCallback, useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import {
@@ -130,9 +131,10 @@ export const PublicTaskView: React.FC = () => {
           </div>
 
           {task.description && (
-            <p className="text-sm leading-relaxed whitespace-pre-wrap text-slate-700 dark:text-slate-200">
-              {task.description}
-            </p>
+            <MarkdownView
+              source={task.description}
+              className="text-sm leading-relaxed text-slate-700 dark:text-slate-200"
+            />
           )}
 
           {task.subtasks.length > 0 && (

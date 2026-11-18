@@ -38,6 +38,7 @@ import { useAgile } from '../context/AgileContext';
 import { IssueType, Priority, Task, DependencyType, TaskPublicLink, VisitorComment, TaskCommit } from '../types';
 import { api } from '../services/api';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
+import { RichTextEditor } from './RichTextEditor';
 import { AttachmentSection } from './AttachmentSection';
 import {
   formatHours,
@@ -722,12 +723,12 @@ export const TaskModal: React.FC = () => {
               <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
                 Descrição do Requisito
               </label>
-              <textarea
-                rows={4}
-                value={task.description}
-                onChange={(e) => updateTask(task.id, { description: e.target.value })}
-                placeholder="Detalhes, critérios de aceitação, contexto técnico..."
-                className="w-full text-xs text-slate-800 dark:text-slate-200 bg-slate-50 dark:bg-slate-800/60 p-3 rounded-lg border border-slate-200 dark:border-slate-700/80 focus:bg-white dark:focus:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+              <RichTextEditor
+                key={task.id}
+                rows={6}
+                value={task.description || ''}
+                onChange={(description) => updateTask(task.id, { description })}
+                placeholder="Detalhes, critérios de aceitação, contexto técnico... (suporta **negrito**, *itálico*, listas, links)"
               />
             </div>
 
