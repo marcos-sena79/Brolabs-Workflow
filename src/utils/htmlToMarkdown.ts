@@ -218,6 +218,102 @@ const listBlock = (list: HNode, depth: number, lines: string[]) => {
   }
 };
 
+type CellAlign = 'left' | 'center' | 'right' | '';
+
+const cellAlign = (cell: HNode): CellAlign => {
+  const read = (n: HNode): CellAlign => {
+    const m = /text-align\s*:\s*(left|center|right)/.exec(styleOf(n)) || /^(left|center|right)$/.exec((n.attrs.align || '').toLowerCase());
+    return (m?.[1] as CellAlign) || '';
+  };
+  const own = read(cell);
+  if (own) return own;
+  const firstBlock = cell.children.find((ch) => ch.tag === 'p' || ch.tag === 'div');
+  return firstBlock ? read(firstBlock) : '';
+};
+
+/**
+ * Converte <table> em tabela GFM. A primeira linha vira cabeçalho; colspan/rowspan
+ * viram células vazias para manter as colunas alinhadas. Tabela de uma coluna
+ * (comum no Word como "caixa" de texto) vira parágrafos.
+ */
+const tableToBlocks = (table: HNode): Block[] => {
+  const trs: HNode[] = [];
+  const walk = (n: HNode) => {
+    for (const ch of n.children) {
+      if (ch.tag === 'tr') trs.push(ch);
+      else if (ch.tag === 'thead' || ch.tag === 'tbody' || ch.tag === 'tfoot') walk(ch);
+    }
+  };
+  walk(table);
+
+  const rows: string[][] = [];
+  const aligns: CellAlign[][] = [];
+  const pending: number[] = []; // rowspan restante por coluna
+
+  for (const tr of trs) {
+    const row: string[] = [];
+    const rowAlign: CellAlign[] = [];
+    let col = 0;
+    const fillPending = () => {
+      while ((pending[col] || 0) > 0) {
+        pending[col]--;
+        row.push('');
+        rowAlign.push('');
+        col++;
+      }
+    };
+    for (const cell of tr.children) {
+      if (cell.tag !== 'td' && cell.tag !== 'th') continue;
+      fillPending();
+      const text = cleanInline(inline({ ...cell, tag: 'span' }, NO_FMT))
+        .replace(/\s*\n\s*/g, ' ')
+        .replace(/\|/g, '\\|');
+      const colspan = Math.max(1, Math.min(50, Number(cell.attrs.colspan) || 1));
+      const rowspan = Math.max(1, Math.min(500, Number(cell.attrs.rowspan) || 1));
+      const align = cellAlign(cell);
+      for (let k = 0; k < colspan; k++) {
+        row.push(k === 0 ? text : '');
+        rowAlign.push(align);
+        if (rowspan > 1) pending[col] = rowspan - 1;
+        col++;
+      }
+    }
+    // Colunas finais ainda ocupadas por rowspan de linhas anteriores
+    for (; col < pending.length; col++) {
+      if ((pending[col] || 0) > 0) pending[col]--;
+      row.push('');
+      rowAlign.push('');
+    }
+    if (row.some(Boolean)) {
+      rows.push(row);
+      aligns.push(rowAlign);
+    }
+  }
+
+  if (!rows.length) return [];
+  const cols = Math.max(...rows.map((r) => r.length));
+
+  if (cols === 1) return rows.map((r) => ({ text: r[0] })).filter((b) => b.text);
+
+  const pad = (r: string[]) => Array.from({ length: cols }, (_, k) => r[k] ?? '');
+  const header = pad(rows[0]).map((h) => {
+    const m = /^\*\*(.+)\*\*$/.exec(h);
+    return m && !m[1].includes('**') ? m[1] : h;
+  });
+
+  const sep = Array.from({ length: cols }, (_, k) => {
+    // considera só células com conteúdo (vazias/mescladas não opinam)
+    const body = aligns.slice(1).flatMap((a, r) => (rows[r + 1][k] ? [a[k] || ''] : []));
+    const set = new Set(body.length ? body : [aligns[0][k] || '']);
+    const a = set.size === 1 ? [...set][0] : '';
+    return a === 'center' ? ':---:' : a === 'right' ? '---:' : '---';
+  });
+
+  const line = (cells: string[]) => `| ${cells.map((v) => v || ' ').join(' | ')} |`;
+  const text = [line(header), `| ${sep.join(' | ')} |`, ...rows.slice(1).map((r) => line(pad(r)))].join('\n');
+  return [{ text }];
+};
+
 const collectBlocks = (node: HNode, out: Block[]) => {
   let buf: HNode[] = [];
   const flush = () => {
@@ -262,19 +358,7 @@ const collectBlocks = (node: HNode, out: Block[]) => {
       continue;
     }
     if (tag === 'table') {
-      const rows: string[] = [];
-      const walkRows = (n: HNode) => {
-        for (const r of n.children) {
-          if (r.tag === 'tr') {
-            const cells = r.children
-              .filter((cell) => cell.tag === 'td' || cell.tag === 'th')
-              .map((cell) => cleanInline(inline({ ...cell, tag: 'span' }, NO_FMT)).replace(/\n/g, ' '));
-            if (cells.some(Boolean)) rows.push(cells.join(' | '));
-          } else if (r.tag) walkRows(r);
-        }
-      };
-      walkRows(c);
-      if (rows.length) out.push({ text: rows.join('\n') });
+      out.push(...tableToBlocks(c));
       continue;
     }
 

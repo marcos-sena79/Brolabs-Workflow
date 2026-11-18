@@ -81,6 +81,80 @@ const listKindOf = (line: string): ListKind | null => {
   return null;
 };
 
+// --- Tabelas (sintaxe GFM) -------------------------------------------------
+
+type Align = 'left' | 'center' | 'right' | undefined;
+
+const TABLE_SEP = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+
+/** Divide uma linha de tabela em células; `\|` é um pipe literal. */
+export const splitTableRow = (line: string): string[] => {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1);
+  const cells: string[] = [];
+  let cur = '';
+  for (let k = 0; k < s.length; k++) {
+    if (s[k] === '\\' && s[k + 1] === '|') {
+      cur += '|';
+      k++;
+    } else if (s[k] === '|') {
+      cells.push(cur.trim());
+      cur = '';
+    } else cur += s[k];
+  }
+  cells.push(cur.trim());
+  return cells;
+};
+
+const isTableStart = (lines: string[], idx: number) =>
+  idx + 1 < lines.length &&
+  lines[idx].includes('|') &&
+  lines[idx + 1].includes('|') &&
+  TABLE_SEP.test(lines[idx + 1]) &&
+  !TABLE_SEP.test(lines[idx]);
+
+const alignOf = (sep: string): Align => {
+  const t = sep.trim();
+  const l = t.startsWith(':');
+  const r = t.endsWith(':');
+  return l && r ? 'center' : r ? 'right' : l ? 'left' : undefined;
+};
+
+const ALIGN_CLS: Record<string, string> = { left: 'text-left', center: 'text-center', right: 'text-right' };
+
+const renderTable = (header: string[], aligns: Align[], rows: string[][], key: string) => {
+  const cols = header.length;
+  const norm = (r: string[]) => Array.from({ length: cols }, (_, c) => r[c] ?? '');
+  const cell = 'border border-slate-200 dark:border-slate-700 px-2 py-1 align-top';
+  return (
+    <div key={key} className="overflow-x-auto">
+      <table className="min-w-full border-collapse text-left">
+        <thead className="bg-slate-100 dark:bg-slate-800">
+          <tr>
+            {header.map((h, c) => (
+              <th key={c} className={`${cell} font-semibold ${ALIGN_CLS[aligns[c] || 'left']}`}>
+                {renderInline(h, `${key}-h${c}`)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r, ri) => (
+            <tr key={ri} className="even:bg-slate-50/60 dark:even:bg-slate-800/30">
+              {norm(r).map((v, c) => (
+                <td key={c} className={`${cell} ${ALIGN_CLS[aligns[c] || 'left']}`}>
+                  {renderInline(v, `${key}-${ri}-${c}`)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
+
 export const renderMarkdown = (source: string): React.ReactNode[] => {
   const lines = (source || '').replace(/\r\n?/g, '\n').split('\n');
   const blocks: React.ReactNode[] = [];
@@ -107,6 +181,17 @@ export const renderMarkdown = (source: string): React.ReactNode[] => {
           {code.join('\n')}
         </pre>,
       );
+      continue;
+    }
+
+    // Tabela
+    if (isTableStart(lines, i)) {
+      const header = splitTableRow(line);
+      const aligns = splitTableRow(lines[i + 1]).map(alignOf);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) rows.push(splitTableRow(lines[i++]));
+      blocks.push(renderTable(header, aligns, rows, key));
       continue;
     }
 
@@ -190,7 +275,8 @@ export const renderMarkdown = (source: string): React.ReactNode[] => {
       !/^#{1,3}\s+/.test(lines[i]) &&
       !/^\s*>/.test(lines[i]) &&
       !/^\s*(-{3,}|\*{3,})\s*$/.test(lines[i]) &&
-      !listKindOf(lines[i])
+      !listKindOf(lines[i]) &&
+      !isTableStart(lines, i)
     ) {
       para.push(lines[i++]);
     }

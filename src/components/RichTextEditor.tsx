@@ -10,6 +10,7 @@ import {
   Quote,
   Code,
   Link as LinkIcon,
+  Table,
   Eye,
   Pencil,
 } from 'lucide-react';
@@ -102,6 +103,21 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
     else wrap('`', '`', 'código');
   };
 
+  const insertTable = () => {
+    const el = ref.current;
+    if (!el) return;
+    const text = value || '';
+    const s = el.selectionEnd;
+    const before = text.slice(0, s);
+    const lead = !before ? '' : before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n';
+    const tpl = '| Coluna 1 | Coluna 2 | Coluna 3 |\n| --- | --- | --- |\n|  |  |  |\n';
+    const after = text.slice(s);
+    const trail = after && !after.startsWith('\n') ? '\n' : '';
+    onChange(before + lead + tpl + trail + after);
+    const start = s + lead.length + 2;
+    restoreSelection(start, start + 'Coluna 1'.length);
+  };
+
   const tools: { icon: React.ElementType; title: string; action: () => void }[] = [
     { icon: Bold, title: 'Negrito (Ctrl+B)', action: () => wrap('**') },
     { icon: Italic, title: 'Itálico (Ctrl+I)', action: () => wrap('*') },
@@ -113,6 +129,7 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({ value, onChange,
     { icon: Quote, title: 'Citação', action: () => prefixLines('> ', /^\s*>\s?/) },
     { icon: Code, title: 'Código', action: insertCode },
     { icon: LinkIcon, title: 'Link (Ctrl+K)', action: insertLink },
+    { icon: Table, title: 'Tabela', action: insertTable },
   ];
 
   /** Ao colar conteúdo rico (Word, Google Docs, web), converte o HTML para Markdown. */

@@ -50,9 +50,48 @@ style='font-family:"Courier New"'><span style='mso-list:Ignore'>o<span style='fo
     );
   });
 
-  it('converte tabelas em linhas separadas por |', () => {
+  it('converte tabelas em tabela GFM com cabeçalho', () => {
     const html = '<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td><b>2</b></td></tr></table>';
-    expect(htmlToMarkdown(html)).toBe('A | B\n1 | **2**');
+    expect(htmlToMarkdown(html)).toBe('| A | B |\n| --- | --- |\n| 1 | **2** |');
+  });
+
+  it('converte tabela do Word (negrito no cabeçalho, colspan, rowspan, pipe, alinhamento)', () => {
+    const html = `<!--StartFragment-->
+<table class=MsoTableGrid border=1 cellspacing=0 cellpadding=0>
+ <tr>
+  <td width=200 style='border:solid windowtext 1.0pt'><p class=MsoNormal><b><span>Campo</span></b><o:p></o:p></p></td>
+  <td width=200><p class=MsoNormal><b>Regra</b></p></td>
+  <td width=100><p class=MsoNormal align=center style='text-align:center'><b>Obrig.</b></p></td>
+ </tr>
+ <tr>
+  <td rowspan=2><p class=MsoNormal>Nome</p></td>
+  <td><p class=MsoNormal>Até 80 chars</p><p class=MsoNormal>sem <i>emoji</i></p></td>
+  <td><p class=MsoNormal align=center style='text-align:center'>Sim</p></td>
+ </tr>
+ <tr>
+  <td><p class=MsoNormal>a | b</p></td>
+  <td><p class=MsoNormal align=center style='text-align:center'>Não</p></td>
+ </tr>
+ <tr>
+  <td colspan=3><p class=MsoNormal>Observação geral</p></td>
+ </tr>
+ <tr><td><p class=MsoNormal>&nbsp;</p></td><td></td><td></td></tr>
+</table>
+<!--EndFragment-->`;
+    expect(htmlToMarkdown(html)).toBe(
+      [
+        '| Campo | Regra | Obrig. |',
+        '| --- | --- | :---: |',
+        '| Nome | Até 80 chars sem *emoji* | Sim |',
+        '|   | a \\| b | Não |',
+        '| Observação geral |   |   |',
+      ].join('\n'),
+    );
+  });
+
+  it('tabela de uma coluna vira parágrafos', () => {
+    const html = '<table><tr><td><p>Aviso <b>importante</b></p></td></tr><tr><td>Segunda</td></tr></table>';
+    expect(htmlToMarkdown(html)).toBe('Aviso **importante**\n\nSegunda');
   });
 
   it('retorna vazio para HTML sem texto', () => {
