@@ -146,6 +146,7 @@ export const taskCreateSchema = z
     statusId: z.string().min(1).max(100),
     assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
     parentId: z.string().trim().min(1).max(100).nullable().optional(),
+    sprintId: z.string().trim().min(1).max(100).nullable().optional(),
   })
   .passthrough();
 
@@ -156,8 +157,37 @@ export const taskUpdateSchema = z
     statusId: z.string().min(1).max(100).optional(),
     assigneeIds: z.array(z.string().min(1).max(100)).max(100).optional(),
     parentId: z.string().trim().min(1).max(100).nullable().optional(),
+    sprintId: z.string().trim().min(1).max(100).nullable().optional(),
   })
   .passthrough();
+
+// --- Sprints ---
+
+const sprintDateSchema = z
+  .string()
+  .regex(/^(\d{4}-\d{2}-\d{2})?$/, 'Data inválida (use AAAA-MM-DD)');
+
+export const sprintCreateSchema = z.object({
+  id: idSchema,
+  name: z.string().trim().min(1).max(255),
+  goal: z.string().max(5000).optional(),
+  startDate: sprintDateSchema.optional(),
+  endDate: sprintDateSchema.optional(),
+});
+
+export const sprintUpdateSchema = z
+  .object({
+    name: z.string().trim().min(1).max(255).optional(),
+    goal: z.string().max(5000).optional(),
+    startDate: sprintDateSchema.optional(),
+    endDate: sprintDateSchema.optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'Nada para atualizar' });
+
+export const sprintCompleteSchema = z.object({
+  /** Sprint planejada que recebe as tarefas não concluídas; ausente/null = backlog */
+  moveToSprintId: z.string().min(1).max(100).nullable().optional(),
+});
 
 export const taskMoveSchema = z.object({
   boardId: idSchema,

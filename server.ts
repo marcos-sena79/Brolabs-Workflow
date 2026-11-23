@@ -10,6 +10,12 @@ import { pool, query } from './src/server/db';
 import { normalizeAssigneeIds, taskAssigneeIds } from './src/utils/taskAssignees';
 import { canSetTaskParent, type TaskHierarchyNode } from './src/utils/taskHierarchy';
 import { hasManualEstimate } from './src/utils/agileHelpers';
+import {
+  BACKLOG_COLUMN_ID,
+  planSprintCompletion,
+  startSprintColumnId,
+  validateSprintFields,
+} from './src/utils/sprints';
 import { initializeDatabase, seedDatabase } from './src/server/initDb';
 import {
   authenticateToken,
@@ -33,6 +39,9 @@ import {
   taskCreateSchema,
   taskUpdateSchema,
   taskMoveSchema,
+  sprintCreateSchema,
+  sprintUpdateSchema,
+  sprintCompleteSchema,
   emailSettingsSchema,
   columnCreateSchema,
   columnUpdateSchema,
@@ -299,6 +308,26 @@ function mapDbBoard(row: any) {
   };
 }
 
+function mapDbSprint(row: any) {
+  return {
+    id: row.id,
+    boardId: row.board_id,
+    name: row.name,
+    goal: row.goal || '',
+    startDate: row.start_date || '',
+    endDate: row.end_date || '',
+    status: row.status,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : '',
+    completedAt: row.completed_at ? new Date(row.completed_at).toISOString() : null,
+  };
+}
+
+/** Verifica se a sprint existe e pertence ao board. */
+async function sprintBelongsToBoard(sprintId: string, boardId: string): Promise<boolean> {
+  const r = await query('SELECT 1 FROM sprints WHERE id = $1 AND board_id = $2', [sprintId, boardId]);
+  return r.rows.length > 0;
+}
+
 function mapDbMember(row: any) {
   return {
     id: row.id,
@@ -336,6 +365,7 @@ function mapDbTask(row: any) {
     reporterId: row.reporter_id || '',
     epicId: row.epic_id || undefined,
     parentId: row.parent_id || undefined,
+    sprintId: row.sprint_id || null,
     estimatedHours: parseFloat(row.estimated_hours) || 0,
     loggedHours: parseFloat(row.logged_hours) || 0,
     storyPoints: parseInt(row.story_points, 10) || 0,
@@ -504,6 +534,12 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
       ]);
 
     const boards = boardsRes.rows.map(mapDbBoard);
+    const sprintsRes = boards.length
+      ? await query('SELECT * FROM sprints WHERE board_id = ANY($1) ORDER BY created_at ASC', [
+          boards.map((b) => b.id),
+        ])
+      : { rows: [] as any[] };
+    const sprints = sprintsRes.rows.map(mapDbSprint);
     const members = membersRes.rows.map(mapDbMember);
     const tasks = tasksRes.rows.map(mapDbTask);
     const activityLogs = activitiesRes.rows.map(mapDbActivity);
@@ -553,6 +589,7 @@ app.get('/api/initial-state', authenticateToken, async (req, res) => {
 
     res.json({
       boards,
+      sprints,
       members,
       tasks,
       activityLogs,
@@ -1009,18 +1046,22 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
       if (hierarchyError) return res.status(400).json({ error: hierarchyError });
     }
 
+    if (t.sprintId && !(await sprintBelongsToBoard(t.sprintId, t.boardId))) {
+      return res.status(400).json({ error: 'A sprint informada não pertence a este quadro.' });
+    }
+
     const assigneeIds = normalizeAssigneeIds(t.assigneeIds, t.assigneeId ? [t.assigneeId] : []);
     await query(
       `INSERT INTO tasks (
         id, key, board_id, title, description, issue_type, priority, status_id,
         assignee_id, reporter_id, epic_id, estimated_hours, logged_hours, story_points,
         due_date, created_at, updated_at, subtasks, worklogs, comments, tags, dependencies,
-        assignee_ids, parent_id
+        assignee_ids, parent_id, sprint_id
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
         $9, $10, $11, $12, $13, $14,
         $15, $16, $17, $18, $19, $20, $21, $22,
-        $23, $24
+        $23, $24, $25
       )`,
       [
         t.id,
@@ -1048,6 +1089,7 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
         JSON.stringify(t.dependencies || []),
         JSON.stringify(assigneeIds),
         t.parentId || null,
+        t.sprintId || null,
       ]
     );
 
@@ -1180,7 +1222,8 @@ app.post('/api/tasks/:id/move', authenticateToken, validateBody(taskMoveSchema),
 
     const updatedRes = await client.query(
       `UPDATE tasks
-       SET board_id = $1, key = $2, status_id = $3, epic_id = $4, parent_id = $5, updated_at = $6
+       SET board_id = $1, key = $2, status_id = $3, epic_id = $4, parent_id = $5, updated_at = $6,
+           sprint_id = NULL
        WHERE id = $7
        RETURNING *`,
       [targetBoardId, newKey, targetStatusId, relations.epicId, relations.parentId, updatedAt, id]
@@ -1272,14 +1315,23 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
       if (hierarchyError) return res.status(400).json({ error: hierarchyError });
     }
 
+    if (
+      'sprintId' in updates &&
+      merged.sprintId &&
+      merged.sprintId !== current.sprintId &&
+      !(await sprintBelongsToBoard(merged.sprintId, merged.boardId))
+    ) {
+      return res.status(400).json({ error: 'A sprint informada não pertence a este quadro.' });
+    }
+
     await query(
       `UPDATE tasks SET
         key = $1, board_id = $2, title = $3, description = $4, issue_type = $5,
         priority = $6, status_id = $7, assignee_id = $8, reporter_id = $9, epic_id = $10,
         estimated_hours = $11, logged_hours = $12, story_points = $13, due_date = $14,
         updated_at = $15, subtasks = $16, worklogs = $17, comments = $18, tags = $19,
-        dependencies = $20, assignee_ids = $21, parent_id = $22
-      WHERE id = $23`,
+        dependencies = $20, assignee_ids = $21, parent_id = $22, sprint_id = $23
+      WHERE id = $24`,
       [
         merged.key,
         merged.boardId,
@@ -1303,6 +1355,7 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
         JSON.stringify(merged.dependencies || []),
         JSON.stringify(assigneeIds),
         merged.parentId || null,
+        merged.sprintId || null,
         id,
       ]
     );
@@ -1741,13 +1794,32 @@ app.post('/api/boards', authenticateToken, validateBody(boardCreateSchema), asyn
         JSON.stringify(b.epics || []),
       ]
     );
+    // Sprint inicial (ativa) com os dados informados na criação do quadro
+    const sprintRes = await query(
+      `INSERT INTO sprints (id, board_id, name, goal, start_date, end_date, status)
+       VALUES ($1, $2, $3, $4, $5, $6, 'active')
+       ON CONFLICT (id) DO NOTHING
+       RETURNING *`,
+      [
+        `sprint-${b.id}`,
+        b.id,
+        (b.sprintName || '').trim() || 'Sprint 1',
+        b.sprintGoal || '',
+        b.sprintStartDate || '',
+        b.sprintEndDate || '',
+      ]
+    );
     // Criador vira owner do board (item 5.1)
     await query(
       `INSERT INTO board_members (board_id, member_id, role, permissions)
        VALUES ($1, $2, 'owner', '{}') ON CONFLICT DO NOTHING`,
       [b.id, req.memberId]
     );
-    res.status(201).json({ success: true, board: b });
+    res.status(201).json({
+      success: true,
+      board: b,
+      sprint: sprintRes.rows[0] ? mapDbSprint(sprintRes.rows[0]) : null,
+    });
   } catch (error: any) {
     console.error('Error creating board:', error);
     res.status(500).json({ error: error.message });
@@ -1798,6 +1870,7 @@ app.delete('/api/boards/:id', authenticateToken, requireBoardPermission('canMana
   try {
     const { id } = req.params;
     await query('DELETE FROM tasks WHERE board_id = $1', [id]);
+    await query('DELETE FROM sprints WHERE board_id = $1', [id]);
     await query('DELETE FROM boards WHERE id = $1', [id]);
     res.json({ success: true });
   } catch (error: any) {
@@ -1805,6 +1878,295 @@ app.delete('/api/boards/:id', authenticateToken, requireBoardPermission('canMana
     res.status(500).json({ error: error.message });
   }
 });
+
+// --- SPRINTS (várias por board: planejadas, uma ativa e concluídas) --- //
+
+/** Espelha a sprint ativa nos campos legados boards.sprint_* (null limpa). */
+async function syncBoardSprintFields(
+  db: { query: (text: string, params?: any[]) => Promise<any> },
+  boardId: string,
+  sprint: any | null
+) {
+  await db.query(
+    `UPDATE boards SET sprint_name = $1, sprint_goal = $2, sprint_start_date = $3, sprint_end_date = $4,
+       updated_at = NOW()
+     WHERE id = $5`,
+    [sprint?.name || '', sprint?.goal || '', sprint?.start_date || '', sprint?.end_date || '', boardId]
+  );
+}
+
+async function loadBoardSprint(boardId: string, sprintId: string) {
+  const r = await query('SELECT * FROM sprints WHERE id = $1 AND board_id = $2', [sprintId, boardId]);
+  return r.rows[0] || null;
+}
+
+app.get('/api/boards/:boardId/sprints', authenticateToken, requireBoardAccess(), async (req, res) => {
+  try {
+    const r = await query('SELECT * FROM sprints WHERE board_id = $1 ORDER BY created_at ASC', [req.params.boardId]);
+    res.json({ sprints: r.rows.map(mapDbSprint) });
+  } catch (error: any) {
+    console.error('Error listing sprints:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post(
+  '/api/boards/:boardId/sprints',
+  authenticateToken,
+  requireBoardPermission('canManageBoard'),
+  validateBody(sprintCreateSchema),
+  async (req, res) => {
+    try {
+      const { boardId } = req.params;
+      const s = req.body;
+      const validationError = validateSprintFields(s);
+      if (validationError) return res.status(400).json({ error: validationError });
+
+      const boardRes = await query('SELECT 1 FROM boards WHERE id = $1', [boardId]);
+      if (boardRes.rows.length === 0) return res.status(404).json({ error: 'Quadro não encontrado' });
+
+      const r = await query(
+        `INSERT INTO sprints (id, board_id, name, goal, start_date, end_date, status)
+         VALUES ($1, $2, $3, $4, $5, $6, 'planned')
+         RETURNING *`,
+        [s.id, boardId, s.name.trim(), s.goal || '', s.startDate || '', s.endDate || '']
+      );
+      res.status(201).json({ success: true, sprint: mapDbSprint(r.rows[0]) });
+    } catch (error: any) {
+      if (error?.code === '23505') return res.status(409).json({ error: 'Já existe uma sprint com este id.' });
+      console.error('Error creating sprint:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.put(
+  '/api/boards/:boardId/sprints/:sprintId',
+  authenticateToken,
+  requireBoardPermission('canManageBoard'),
+  validateBody(sprintUpdateSchema),
+  async (req, res) => {
+    try {
+      const { boardId, sprintId } = req.params;
+      const current = await loadBoardSprint(boardId, sprintId);
+      if (!current) return res.status(404).json({ error: 'Sprint não encontrada' });
+
+      const u = req.body;
+      const merged = {
+        name: u.name !== undefined ? u.name.trim() : current.name,
+        goal: u.goal !== undefined ? u.goal : current.goal,
+        startDate: u.startDate !== undefined ? u.startDate : current.start_date,
+        endDate: u.endDate !== undefined ? u.endDate : current.end_date,
+      };
+      const validationError = validateSprintFields(merged);
+      if (validationError) return res.status(400).json({ error: validationError });
+
+      const r = await query(
+        `UPDATE sprints SET name = $1, goal = $2, start_date = $3, end_date = $4
+         WHERE id = $5 RETURNING *`,
+        [merged.name, merged.goal, merged.startDate, merged.endDate, sprintId]
+      );
+      const updated = r.rows[0];
+      if (updated.status === 'active') await syncBoardSprintFields({ query }, boardId, updated);
+      res.json({ success: true, sprint: mapDbSprint(updated) });
+    } catch (error: any) {
+      console.error('Error updating sprint:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+app.delete(
+  '/api/boards/:boardId/sprints/:sprintId',
+  authenticateToken,
+  requireBoardPermission('canManageBoard'),
+  async (req, res) => {
+    const client = await pool.connect();
+    let inTx = false;
+    try {
+      const { boardId, sprintId } = req.params;
+      const current = await loadBoardSprint(boardId, sprintId);
+      if (!current) return res.status(404).json({ error: 'Sprint não encontrada' });
+      if (current.status !== 'planned') {
+        return res.status(400).json({ error: 'Somente sprints planejadas podem ser excluídas.' });
+      }
+      await client.query('BEGIN');
+      inTx = true;
+      // Tarefas da sprint excluída voltam ao backlog
+      const tasksRes = await client.query(
+        `UPDATE tasks SET sprint_id = NULL, status_id = $1, updated_at = $2
+         WHERE sprint_id = $3 RETURNING *`,
+        [BACKLOG_COLUMN_ID, new Date().toISOString(), sprintId]
+      );
+      await client.query('DELETE FROM sprints WHERE id = $1', [sprintId]);
+      await client.query('COMMIT');
+      inTx = false;
+      res.json({ success: true, tasks: tasksRes.rows.map(mapDbTask) });
+    } catch (error: any) {
+      if (inTx) await client.query('ROLLBACK');
+      console.error('Error deleting sprint:', error);
+      res.status(500).json({ error: error.message });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+app.post(
+  '/api/boards/:boardId/sprints/:sprintId/start',
+  authenticateToken,
+  requireBoardPermission('canManageBoard'),
+  async (req, res) => {
+    const client = await pool.connect();
+    let inTx = false;
+    const fail = async (status: number, error: string) => {
+      await client.query('ROLLBACK');
+      inTx = false;
+      return res.status(status).json({ error });
+    };
+    try {
+      const { boardId, sprintId } = req.params;
+      await client.query('BEGIN');
+      inTx = true;
+      const sprintRes = await client.query(
+        'SELECT * FROM sprints WHERE id = $1 AND board_id = $2 FOR UPDATE',
+        [sprintId, boardId]
+      );
+      const sprint = sprintRes.rows[0];
+      if (!sprint) return fail(404, 'Sprint não encontrada');
+      if (sprint.status !== 'planned') return fail(400, 'Somente sprints planejadas podem ser iniciadas.');
+
+      const boardRes = await client.query('SELECT * FROM boards WHERE id = $1 FOR UPDATE', [boardId]);
+      if (!boardRes.rows.length) return fail(404, 'Quadro não encontrado');
+      const board = mapDbBoard(boardRes.rows[0]);
+
+      const activeRes = await client.query(
+        `SELECT name FROM sprints WHERE board_id = $1 AND status = 'active' LIMIT 1`,
+        [boardId]
+      );
+      if (activeRes.rows.length > 0) {
+        return fail(409, `Conclua a sprint ativa "${activeRes.rows[0].name}" antes de iniciar outra.`);
+      }
+
+      const today = new Date().toISOString().split('T')[0];
+      const updatedRes = await client.query(
+        `UPDATE sprints SET status = 'active', start_date = $1 WHERE id = $2 RETURNING *`,
+        [sprint.start_date || today, sprintId]
+      );
+      // Itens planejados saem da coluna Backlog e entram em "A Fazer"
+      const tasksRes = await client.query(
+        `UPDATE tasks SET status_id = $1, updated_at = $2
+         WHERE sprint_id = $3 AND status_id = $4 AND archived_at IS NULL
+         RETURNING *`,
+        [startSprintColumnId(board), new Date().toISOString(), sprintId, BACKLOG_COLUMN_ID]
+      );
+      await syncBoardSprintFields(client, boardId, updatedRes.rows[0]);
+      await client.query('COMMIT');
+      inTx = false;
+      res.json({ success: true, sprint: mapDbSprint(updatedRes.rows[0]), tasks: tasksRes.rows.map(mapDbTask) });
+    } catch (error: any) {
+      if (inTx) await client.query('ROLLBACK');
+      if (error?.code === '23505') {
+        return res.status(409).json({ error: 'Já existe uma sprint ativa neste quadro.' });
+      }
+      console.error('Error starting sprint:', error);
+      res.status(500).json({ error: error.message });
+    } finally {
+      client.release();
+    }
+  }
+);
+
+app.post(
+  '/api/boards/:boardId/sprints/:sprintId/complete',
+  authenticateToken,
+  requireBoardPermission('canManageBoard'),
+  validateBody(sprintCompleteSchema),
+  async (req, res) => {
+    const client = await pool.connect();
+    let inTx = false;
+    const fail = async (status: number, error: string) => {
+      await client.query('ROLLBACK');
+      inTx = false;
+      return res.status(status).json({ error });
+    };
+    try {
+      const { boardId, sprintId } = req.params;
+      const moveToSprintId: string | null = req.body.moveToSprintId || null;
+      await client.query('BEGIN');
+      inTx = true;
+      const sprintRes = await client.query(
+        'SELECT * FROM sprints WHERE id = $1 AND board_id = $2 FOR UPDATE',
+        [sprintId, boardId]
+      );
+      const sprint = sprintRes.rows[0];
+      if (!sprint) return fail(404, 'Sprint não encontrada');
+      if (sprint.status !== 'active') return fail(400, 'Somente a sprint ativa pode ser concluída.');
+      if (moveToSprintId) {
+        const targetRes = await client.query('SELECT status FROM sprints WHERE id = $1 AND board_id = $2', [
+          moveToSprintId,
+          boardId,
+        ]);
+        if (targetRes.rows[0]?.status !== 'planned') {
+          return fail(400, 'As tarefas pendentes só podem ir para uma sprint planejada deste quadro.');
+        }
+      }
+
+      const boardRes = await client.query('SELECT * FROM boards WHERE id = $1 FOR UPDATE', [boardId]);
+      if (!boardRes.rows.length) return fail(404, 'Quadro não encontrado');
+      const board = mapDbBoard(boardRes.rows[0]);
+
+      // Inclui tarefas legadas sem sprint_id que já estavam fora do Backlog
+      const sprintTasksRes = await client.query(
+        `SELECT id, status_id AS "statusId" FROM tasks
+         WHERE board_id = $1 AND archived_at IS NULL
+           AND (sprint_id = $2 OR (sprint_id IS NULL AND status_id <> $3))
+         FOR UPDATE`,
+        [boardId, sprintId, BACKLOG_COLUMN_ID]
+      );
+      const { doneIds, carryOverIds } = planSprintCompletion(board, sprintTasksRes.rows);
+      const now = new Date().toISOString();
+
+      const changed: any[] = [];
+      if (doneIds.length) {
+        // Concluídas ficam registradas na sprint (histórico)
+        const r = await client.query('UPDATE tasks SET sprint_id = $1 WHERE id = ANY($2) RETURNING *', [
+          sprintId,
+          doneIds,
+        ]);
+        changed.push(...r.rows);
+      }
+      if (carryOverIds.length) {
+        const r = await client.query(
+          'UPDATE tasks SET sprint_id = $1, status_id = $2, updated_at = $3 WHERE id = ANY($4) RETURNING *',
+          [moveToSprintId, BACKLOG_COLUMN_ID, now, carryOverIds]
+        );
+        changed.push(...r.rows);
+      }
+
+      const updatedRes = await client.query(
+        `UPDATE sprints SET status = 'completed', completed_at = NOW() WHERE id = $1 RETURNING *`,
+        [sprintId]
+      );
+      await syncBoardSprintFields(client, boardId, null);
+      await client.query('COMMIT');
+      inTx = false;
+      res.json({
+        success: true,
+        sprint: mapDbSprint(updatedRes.rows[0]),
+        tasks: changed.map(mapDbTask),
+        doneCount: doneIds.length,
+        carriedOverCount: carryOverIds.length,
+      });
+    } catch (error: any) {
+      if (inTx) await client.query('ROLLBACK');
+      console.error('Error completing sprint:', error);
+      res.status(500).json({ error: error.message });
+    } finally {
+      client.release();
+    }
+  }
+);
 
 // --- BOARD SHARE (item 1.2 — quadro público/privado) --- //
 

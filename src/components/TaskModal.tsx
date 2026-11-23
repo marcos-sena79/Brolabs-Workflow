@@ -35,6 +35,7 @@ import {
   GitCommit,
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
+import { getActiveSprint, getTaskSprintId, sortBoardSprints } from '../utils/sprints';
 import { IssueType, Priority, Task, DependencyType, TaskPublicLink, VisitorComment, TaskCommit } from '../types';
 import { api } from '../services/api';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
@@ -91,6 +92,8 @@ export const TaskModal: React.FC = () => {
     archiveTask,
     can,
     runTaskAi,
+    sprints,
+    moveTaskToSprint,
   } = useAgile();
 
   const task = tasks.find((t) => t.id === selectedTaskModalId);
@@ -2010,6 +2013,40 @@ export const TaskModal: React.FC = () => {
                   ))}
                 </select>
               </div>
+
+              {/* Sprint */}
+              {(() => {
+                const taskSprints = sortBoardSprints(sprints, task.boardId);
+                const active = getActiveSprint(sprints, task.boardId);
+                const currentSprintId = getTaskSprintId(task, active?.id) ?? '';
+                const current = taskSprints.find((s) => s.id === currentSprintId);
+                const openSprints = taskSprints.filter((s) => s.status !== 'completed');
+                return (
+                  <div>
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                      Sprint
+                    </label>
+                    <select
+                      value={currentSprintId}
+                      onChange={(e) => moveTaskToSprint(task.id, e.target.value || null)}
+                      disabled={!can('canChangeStatus', task.boardId)}
+                      className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      <option value="">Backlog (sem sprint)</option>
+                      {current?.status === 'completed' && (
+                        <option value={current.id} disabled>
+                          {current.name} (concluída)
+                        </option>
+                      )}
+                      {openSprints.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.name} {s.status === 'active' ? '(ativa)' : '(planejada)'}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
 
               {allowedParentType && (
                 <div>

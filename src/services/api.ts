@@ -26,10 +26,12 @@ import {
   TaskCommit,
   GithubRepoSetting,
   TagDef,
+  Sprint,
 } from '../types';
 
 export interface InitialStateResponse {
   boards: Board[];
+  sprints?: Sprint[];
   members: Member[];
   tasks: Task[];
   activityLogs: ActivityItem[];
@@ -75,6 +77,17 @@ function getAuthHeaders(): HeadersInit {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
   };
+}
+
+async function sprintRequest(boardId: string, suffix: string, method: string, body?: unknown): Promise<any> {
+  const res = await fetch(`/api/boards/${encodeURIComponent(boardId)}/sprints${suffix}`, {
+    method,
+    headers: getAuthHeaders(),
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error(data?.error || 'Falha ao salvar sprint');
+  return data;
 }
 
 export const api = {
@@ -194,6 +207,40 @@ export const api = {
       headers: getAuthHeaders(),
     });
     if (!res.ok) throw new Error('Falha ao deletar board no NeonDB');
+  },
+
+  // Sprints
+  async createSprint(
+    boardId: string,
+    sprint: Pick<Sprint, 'id' | 'name' | 'goal' | 'startDate' | 'endDate'>
+  ): Promise<Sprint> {
+    const data = await sprintRequest(boardId, '', 'POST', sprint);
+    return data.sprint;
+  },
+
+  async updateSprint(
+    boardId: string,
+    sprintId: string,
+    updates: Partial<Pick<Sprint, 'name' | 'goal' | 'startDate' | 'endDate'>>
+  ): Promise<Sprint> {
+    const data = await sprintRequest(boardId, `/${encodeURIComponent(sprintId)}`, 'PUT', updates);
+    return data.sprint;
+  },
+
+  async deleteSprint(boardId: string, sprintId: string): Promise<{ tasks: Task[] }> {
+    return sprintRequest(boardId, `/${encodeURIComponent(sprintId)}`, 'DELETE');
+  },
+
+  async startSprint(boardId: string, sprintId: string): Promise<{ sprint: Sprint; tasks: Task[] }> {
+    return sprintRequest(boardId, `/${encodeURIComponent(sprintId)}/start`, 'POST', {});
+  },
+
+  async completeSprint(
+    boardId: string,
+    sprintId: string,
+    moveToSprintId: string | null
+  ): Promise<{ sprint: Sprint; tasks: Task[]; doneCount: number; carriedOverCount: number }> {
+    return sprintRequest(boardId, `/${encodeURIComponent(sprintId)}/complete`, 'POST', { moveToSprintId });
   },
 
   // Board público/privado (item 1.2)

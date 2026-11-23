@@ -74,6 +74,7 @@ export interface Task {
   reporterId: string;
   epicId?: string | null;
   parentId?: string | null; // história pai (Onda 2 — 2A)
+  sprintId?: string | null; // sprint à qual a tarefa pertence (null = backlog)
   estimatedHours: number;
   loggedHours: number;
   storyPoints: number;
@@ -105,6 +106,20 @@ export interface Epic {
   name: string;
   color: string;
   description: string;
+}
+
+export type SprintStatus = 'planned' | 'active' | 'completed';
+
+export interface Sprint {
+  id: string;
+  boardId: string;
+  name: string;
+  goal: string;
+  startDate: string;
+  endDate: string;
+  status: SprintStatus;
+  createdAt: string;
+  completedAt?: string | null;
 }
 
 export interface Board {

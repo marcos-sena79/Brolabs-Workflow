@@ -279,6 +279,21 @@ export async function seedDatabase() {
       );
     }
 
+    // Sprints (migration 0021): a sprint de cada board vira a sprint ativa
+    const sprintsTable = await client.query(`SELECT to_regclass('public.sprints') AS t`);
+    if (sprintsTable.rows[0]?.t) {
+      await client.query('DELETE FROM sprints');
+      await client.query(
+        `INSERT INTO sprints (id, board_id, name, goal, start_date, end_date, status)
+         SELECT 'sprint-' || id, id, COALESCE(NULLIF(TRIM(sprint_name), ''), 'Sprint 1'),
+                COALESCE(sprint_goal, ''), COALESCE(sprint_start_date, ''), COALESCE(sprint_end_date, ''), 'active'
+         FROM boards`
+      );
+      await client.query(
+        `UPDATE tasks SET sprint_id = 'sprint-' || board_id WHERE status_id <> 'col-backlog'`
+      );
+    }
+
     // Insert activity logs
     for (const a of INITIAL_ACTIVITY_LOGS) {
       await client.query(

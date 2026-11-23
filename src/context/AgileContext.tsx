@@ -24,6 +24,7 @@ import {
   Note,
   NoteAiAction,
   TagDef,
+  Sprint,
 } from '../types';
 import { api } from '../services/api';
 import { normalizeAssigneeIds, taskHasAssignee } from '../utils/taskAssignees';
@@ -32,6 +33,13 @@ import { useTheme } from './ThemeContext';
 import { getTaskHours, getTodoColumnId, hasManualEstimate, isTaskDone } from '../utils/agileHelpers';
 import { playSound, SoundEvent } from '../utils/sound';
 import { EMPTY_BOARD, EMPTY_MEMBER, resolveInitialState } from '../utils/initialDataFlow';
+import {
+  BACKLOG_COLUMN_ID,
+  getActiveSprint,
+  sortBoardSprints,
+  sprintIdForNewTask,
+  sprintIdForStatusChange,
+} from '../utils/sprints';
 
 interface ActiveTimer {
   taskId: string;
@@ -57,6 +65,10 @@ interface AgileContextType {
   tasks: Task[];
   boardTasks: Task[];
   filteredBoardTasks: Task[];
+  sprints: Sprint[];
+  /** Sprints do board atual: ativa, planejadas e concluídas */
+  boardSprints: Sprint[];
+  activeSprint?: Sprint;
   members: Member[];
   currentUser: Member;
   activityLogs: ActivityItem[];
@@ -111,6 +123,7 @@ interface AgileContextType {
     storyPoints: number;
     dueDate: string;
     tags?: string[];
+    sprintId?: string | null;
   }) => Task;
   updateTask: (taskId: string, updates: Partial<Task>) => void;
   moveTask: (taskId: string, targetStatusId: string) => void;
@@ -136,6 +149,21 @@ interface AgileContextType {
   // Board Operations
   createBoard: (board: { name: string; key: string; description: string; sprintName: string }) => void;
   updateBoard: (boardId: string, updates: Partial<Board>) => void;
+
+  // Sprints
+  createSprint: (data: { name: string; goal: string; startDate: string; endDate: string }) => Promise<Sprint>;
+  updateSprint: (
+    sprintId: string,
+    updates: Partial<Pick<Sprint, 'name' | 'goal' | 'startDate' | 'endDate'>>
+  ) => Promise<void>;
+  deleteSprint: (sprintId: string) => Promise<void>;
+  startSprint: (sprintId: string) => Promise<void>;
+  completeSprint: (
+    sprintId: string,
+    moveToSprintId: string | null
+  ) => Promise<{ doneCount: number; carriedOverCount: number }>;
+  /** Move a tarefa para uma sprint (null = backlog), ajustando a coluna */
+  moveTaskToSprint: (taskId: string, sprintId: string | null) => void;
   addColumn: (data: {
     title: string;
     accentColor?: string;
@@ -270,6 +298,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [dbConnected, setDbConnected] = useState(true);
 
   const [boards, setBoards] = useState<Board[]>([]);
+  const [sprints, setSprints] = useState<Sprint[]>([]);
   const [currentBoardId, setCurrentBoardIdState] = useState<string>('');
   const [tasks, setTasks] = useState<Task[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -358,6 +387,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       const data = await api.getInitialState();
       const resolved = resolveInitialState(data);
       setBoards(resolved.boards);
+      setSprints(data.sprints || []);
       setMembers(resolved.members);
       setTasks(data.tasks || []);
       setActivityLogs(data.activityLogs || []);
@@ -688,6 +718,9 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     return members.find((m) => m.id === currentUserId) || members[0] || EMPTY_MEMBER_PLACEHOLDER;
   }, [members, currentUserId, authMember]);
 
+  const boardSprints = useMemo(() => sortBoardSprints(sprints, currentBoard.id), [sprints, currentBoard.id]);
+  const activeSprint = useMemo(() => getActiveSprint(sprints, currentBoard.id), [sprints, currentBoard.id]);
+
   // Tasks for current board
   const boardTasks = useMemo(() => {
     return tasks.filter((t) => t.boardId === currentBoard.id);
@@ -872,6 +905,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     storyPoints: number;
     dueDate: string;
     tags?: string[];
+    sprintId?: string | null;
   }): Task => {
     const prefix = currentBoard.key || 'TASK';
     const existingNumbers = tasks
@@ -900,6 +934,10 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
       reporterId: currentUser.id,
       epicId: taskData.epicId,
       parentId: taskData.parentId || null,
+      sprintId:
+        taskData.sprintId !== undefined
+          ? taskData.sprintId
+          : sprintIdForNewTask(taskData.statusId || getTodoColumnId(currentBoard), activeSprint?.id),
       // Épico/História/Tarefa: estimativa vem só das sub-tarefas (apenas Bug aceita valor próprio)
       estimatedHours: hasManualEstimate(taskData.issueType || 'task') ? taskData.estimatedHours || 0 : 0,
       loggedHours: 0,
@@ -992,7 +1030,11 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const targetCol = currentBoard.columns.find((c) => c.id === targetStatusId);
     const isMovedToDone = isTaskDone(currentBoard, targetStatusId);
 
-    updateTask(taskId, { statusId: targetStatusId });
+    const nextSprintId = sprintIdForStatusChange(task, targetStatusId, activeSprint?.id);
+    updateTask(
+      taskId,
+      nextSprintId === undefined ? { statusId: targetStatusId } : { statusId: targetStatusId, sprintId: nextSprintId }
+    );
 
     // Som de desbloqueio (item 3.3): mover para coluna "done" destrava tarefas dependentes
     if (isMovedToDone) {
@@ -1565,6 +1607,20 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     };
 
     setBoards((prev) => [...prev, newBoard]);
+    setSprints((prev) => [
+      ...prev,
+      {
+        id: `sprint-${newBoard.id}`,
+        boardId: newBoard.id,
+        name: newBoard.sprintName,
+        goal: newBoard.sprintGoal,
+        startDate: newBoard.sprintStartDate,
+        endDate: newBoard.sprintEndDate,
+        status: 'active',
+        createdAt: new Date().toISOString(),
+        completedAt: null,
+      },
+    ]);
     setCurrentBoardId(newBoard.id);
     api.createBoard(newBoard).catch(console.error);
   };
@@ -1580,6 +1636,98 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return b;
       })
     );
+  };
+
+  // --- Sprints --- //
+
+  /** Espelha a sprint ativa nos campos legados do board (Navbar, dashboards). */
+  const mirrorActiveSprintOnBoard = (boardId: string, sprint: Sprint | null) => {
+    setBoards((prev) =>
+      prev.map((b) =>
+        b.id === boardId
+          ? {
+              ...b,
+              sprintName: sprint?.name || '',
+              sprintGoal: sprint?.goal || '',
+              sprintStartDate: sprint?.startDate || '',
+              sprintEndDate: sprint?.endDate || '',
+            }
+          : b
+      )
+    );
+  };
+
+  const mergeTasksFromServer = (updated: Task[]) => {
+    if (!updated.length) return;
+    const byId = new Map(updated.map((t) => [t.id, t]));
+    setTasks((prev) => prev.map((t) => byId.get(t.id) || t));
+  };
+
+  const replaceSprint = (sprint: Sprint) => {
+    setSprints((prev) => prev.map((s) => (s.id === sprint.id ? sprint : s)));
+  };
+
+  const createSprint = async (data: { name: string; goal: string; startDate: string; endDate: string }) => {
+    const boardId = currentBoard.id;
+    const created = await api.createSprint(boardId, { id: `sprint-${Date.now()}`, ...data });
+    setSprints((prev) => [...prev, created]);
+    return created;
+  };
+
+  const updateSprint = async (
+    sprintId: string,
+    updates: Partial<Pick<Sprint, 'name' | 'goal' | 'startDate' | 'endDate'>>
+  ) => {
+    const boardId = currentBoard.id;
+    const updated = await api.updateSprint(boardId, sprintId, updates);
+    replaceSprint(updated);
+    if (updated.status === 'active') mirrorActiveSprintOnBoard(boardId, updated);
+  };
+
+  const deleteSprint = async (sprintId: string) => {
+    const res = await api.deleteSprint(currentBoard.id, sprintId);
+    setSprints((prev) => prev.filter((s) => s.id !== sprintId));
+    mergeTasksFromServer(res.tasks || []);
+  };
+
+  const startSprint = async (sprintId: string) => {
+    const boardId = currentBoard.id;
+    const res = await api.startSprint(boardId, sprintId);
+    replaceSprint(res.sprint);
+    mergeTasksFromServer(res.tasks || []);
+    mirrorActiveSprintOnBoard(boardId, res.sprint);
+  };
+
+  const completeSprint = async (sprintId: string, moveToSprintId: string | null) => {
+    const boardId = currentBoard.id;
+    const res = await api.completeSprint(boardId, sprintId, moveToSprintId);
+    replaceSprint(res.sprint);
+    mergeTasksFromServer(res.tasks || []);
+    mirrorActiveSprintOnBoard(boardId, null);
+    return { doneCount: res.doneCount, carriedOverCount: res.carriedOverCount };
+  };
+
+  const moveTaskToSprint = (taskId: string, sprintId: string | null) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    const target = sprintId ? sprints.find((s) => s.id === sprintId) : undefined;
+    const isActive = Boolean(target && target.status === 'active');
+    // Sprint ativa: sai da coluna Backlog; planejada ou backlog: volta para a coluna Backlog
+    const statusId = isActive
+      ? task.statusId === BACKLOG_COLUMN_ID
+        ? getTodoColumnId(currentBoard)
+        : task.statusId
+      : BACKLOG_COLUMN_ID;
+    updateTask(taskId, statusId === task.statusId ? { sprintId } : { sprintId, statusId });
+    logActivity({
+      type: 'task_updated',
+      taskId: task.id,
+      taskKey: task.key,
+      taskTitle: task.title,
+      memberId: currentUser.id,
+      memberName: currentUser.name,
+      details: target ? `Moveu para a sprint "${target.name}"` : 'Moveu para o backlog',
+    });
   };
 
   // Board columns (item 1.1) — lock otimista via boards.version
@@ -2035,6 +2183,9 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         tasks,
         boardTasks,
         filteredBoardTasks,
+        sprints,
+        boardSprints,
+        activeSprint,
         members,
         currentUser,
         activityLogs,
@@ -2084,6 +2235,12 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         addComment,
         createBoard,
         updateBoard,
+        createSprint,
+        updateSprint,
+        deleteSprint,
+        startSprint,
+        completeSprint,
+        moveTaskToSprint,
         addColumn,
         updateColumn,
         reorderColumns,
