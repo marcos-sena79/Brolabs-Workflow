@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   BarChart3,
   TrendingDown,
@@ -16,6 +16,9 @@ import {
 } from 'lucide-react';
 import { useAgile } from '../context/AgileContext';
 import { formatHours, formatDate, getTaskHours, isTaskDone } from '../utils/agileHelpers';
+import { buildSprintBurndown } from '../utils/burndown';
+import { getTaskSprintId } from '../utils/sprints';
+import { SprintBurndownChart } from './SprintBurndownChart';
 
 export const ProductivityReportView: React.FC = () => {
   const { currentBoard, boardTasks, members } = useAgile();
@@ -47,20 +50,6 @@ export const ProductivityReportView: React.FC = () => {
   const estimationAccuracy = totalEstHours > 0
     ? Math.max(0, Math.round((1 - Math.abs(totalLogHours - totalEstHours) / totalEstHours) * 100))
     : 92;
-
-  // Burndown chart data points (10 sprint days)
-  const sprintDays = [
-    { day: 'D1', ideal: 85, actual: 85 },
-    { day: 'D2', ideal: 76, actual: 82 },
-    { day: 'D3', ideal: 68, actual: 74 },
-    { day: 'D4', ideal: 59, actual: 66 },
-    { day: 'D5', ideal: 51, actual: 57 },
-    { day: 'D6', ideal: 42, actual: 48 },
-    { day: 'D7', ideal: 34, actual: 36 },
-    { day: 'D8 (Hoje)', ideal: 25, actual: 29 },
-    { day: 'D9', ideal: 17, actual: null },
-    { day: 'D10', ideal: 0, actual: null },
-  ];
 
   // Velocity history
   const velocityHistory = [
@@ -190,81 +179,7 @@ Gerado automaticamente pelo Brolabs Workflow`;
         </div>
       </div>
 
-      {/* Sprint Burndown Chart Section */}
-      <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
-              <TrendingDown className="w-4 h-4 text-indigo-500" />
-              Sprint Burndown Chart (Horas Restantes ao Longo dos Dias)
-            </h3>
-            <p className="text-[11px] text-slate-400 mt-0.5">
-              Compara a queima ideal prevista com a curva real de esforço executado pela squad
-            </p>
-          </div>
-
-          <div className="flex items-center gap-4 text-xs font-medium">
-            <span className="flex items-center gap-1.5 text-slate-400">
-              <span className="w-3 h-0.5 bg-slate-300 dark:bg-slate-600 border-dashed" />
-              Ideal
-            </span>
-            <span className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 font-semibold">
-              <span className="w-3 h-1 bg-indigo-600 rounded-full" />
-              Realizado
-            </span>
-          </div>
-        </div>
-
-        {/* Responsive Burndown Graphic */}
-        <div className="bg-slate-50 dark:bg-slate-950/60 p-4 rounded-xl border border-slate-200 dark:border-slate-800/80">
-          <div className="h-64 flex items-end justify-between gap-2 px-2 pt-8 pb-4 relative">
-            {/* Horizontal Gridlines */}
-            <div className="absolute inset-x-0 top-8 border-b border-dashed border-slate-200 dark:border-slate-800 text-[10px] text-slate-400 pl-2">
-              80h
-            </div>
-            <div className="absolute inset-x-0 top-24 border-b border-dashed border-slate-200 dark:border-slate-800 text-[10px] text-slate-400 pl-2">
-              50h
-            </div>
-            <div className="absolute inset-x-0 top-40 border-b border-dashed border-slate-200 dark:border-slate-800 text-[10px] text-slate-400 pl-2">
-              25h
-            </div>
-
-            {sprintDays.map((item, idx) => {
-              const maxVal = 90;
-              const idealHeight = `${(item.ideal / maxVal) * 100}%`;
-              const actualHeight = item.actual !== null ? `${(item.actual / maxVal) * 100}%` : '0%';
-
-              return (
-                <div key={idx} className="flex-1 flex flex-col items-center h-full justify-end relative z-10">
-                  <div className="w-full flex items-end justify-center gap-1 h-full pb-2">
-                    {/* Ideal Bar (ghost) */}
-                    <div
-                      style={{ height: idealHeight }}
-                      className="w-2.5 sm:w-3.5 bg-slate-200 dark:bg-slate-700 rounded-t transition-all"
-                      title={`Ideal: ${item.ideal}h`}
-                    />
-                    {/* Actual Bar (solid) */}
-                    {item.actual !== null && (
-                      <div
-                        style={{ height: actualHeight }}
-                        className="w-3 sm:w-4 bg-indigo-600 dark:bg-indigo-500 rounded-t shadow-xs transition-all relative group"
-                        title={`Real: ${item.actual}h restantes`}
-                      >
-                        <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-slate-900 text-white text-[10px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-20">
-                          {item.actual}h
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  <span className="text-[10px] font-mono text-slate-500 text-center whitespace-nowrap">
-                    {item.day}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </div>
+      <SprintBurndownSection />
 
       {/* Velocity History (Sprint a Sprint) */}
       <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-4">
@@ -330,6 +245,98 @@ Gerado automaticamente pelo Brolabs Workflow`;
             </pre>
           </div>
         </div>
+      )}
+    </div>
+  );
+};
+
+const localToday = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+
+/** Burndown em horas da sprint selecionada (ativa por padrão). */
+const SprintBurndownSection: React.FC = () => {
+  const { boardTasks, boardSprints, activeSprint } = useAgile();
+  const selectable = boardSprints.filter((s) => s.status !== 'planned');
+  const [chosenId, setChosenId] = useState<string>('');
+  const sprint = selectable.find((s) => s.id === chosenId) || activeSprint || selectable[0];
+  const today = localToday();
+
+  const burndown = useMemo(() => {
+    if (!sprint) return null;
+    const sprintTasks = boardTasks.filter((t) => getTaskSprintId(t, activeSprint?.id) === sprint.id);
+    return buildSprintBurndown(sprint, sprintTasks, today);
+  }, [sprint, boardTasks, activeSprint?.id, today]);
+
+  const daysLeft =
+    sprint?.status === 'active' && burndown
+      ? burndown.points.filter((p) => p.date > today).length
+      : null;
+
+  return (
+    <div className="bg-white dark:bg-slate-900 rounded-xl p-5 border border-slate-200 dark:border-slate-800 shadow-2xs space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+            <TrendingDown className="w-4 h-4 text-indigo-500" />
+            Burndown da Sprint (horas restantes)
+          </h3>
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            Restante = horas estimadas das tarefas da sprint − horas realizadas acumuladas até cada dia
+          </p>
+        </div>
+        {selectable.length > 0 && (
+          <select
+            value={sprint?.id || ''}
+            onChange={(e) => setChosenId(e.target.value)}
+            aria-label="Sprint do burndown"
+            className="text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          >
+            {selectable.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} {s.status === 'active' ? '(ativa)' : '(concluída)'}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      {!sprint ? (
+        <p className="text-xs text-slate-400 italic py-8 text-center">
+          Nenhuma sprint iniciada neste quadro. Inicie uma sprint no Backlog para acompanhar o burndown.
+        </p>
+      ) : !burndown ? (
+        <p className="text-xs text-slate-400 italic py-8 text-center">
+          A sprint "{sprint.name}" não tem data de início. Defina as datas no Backlog para gerar o burndown.
+        </p>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            {[
+              { label: 'Estimado', value: formatHours(burndown.totalEstimated) },
+              { label: 'Realizado', value: formatHours(burndown.totalLogged) },
+              { label: 'Restante', value: formatHours(burndown.remaining) },
+              {
+                label: daysLeft === null ? 'Período' : 'Dias restantes',
+                value: daysLeft === null ? `${burndown.points.length} dias` : String(daysLeft),
+              },
+            ].map((stat) => (
+              <div key={stat.label} className="px-3 py-2 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/60">
+                <p className="text-[10px] uppercase tracking-wider font-semibold text-slate-400">{stat.label}</p>
+                <p className="text-base font-bold font-mono text-slate-900 dark:text-slate-100">{stat.value}</p>
+              </div>
+            ))}
+          </div>
+
+          {burndown.totalEstimated === 0 ? (
+            <p className="text-xs text-slate-400 italic py-8 text-center">
+              As tarefas desta sprint ainda não têm horas estimadas. Estime as sub-tarefas para gerar o burndown.
+            </p>
+          ) : (
+            <SprintBurndownChart burndown={burndown} today={today} />
+          )}
+        </>
       )}
     </div>
   );
