@@ -8,7 +8,7 @@ import dotenv from 'dotenv';
 import cookieParser from 'cookie-parser';
 import { pool, query } from './src/server/db';
 import { normalizeAssigneeIds, taskAssigneeIds } from './src/utils/taskAssignees';
-import { canSetTaskParent, type TaskHierarchyNode } from './src/utils/taskHierarchy';
+import { canSetTaskParent, epicIdForIssueType, type TaskHierarchyNode } from './src/utils/taskHierarchy';
 import { hasManualEstimate } from './src/utils/agileHelpers';
 import {
   BACKLOG_COLUMN_ID,
@@ -1074,7 +1074,7 @@ app.post('/api/tasks', authenticateToken, requireBoardPermission('canCreateTask'
         t.statusId,
         assigneeIds[0] || '',
         t.reporterId || '',
-        t.epicId || null,
+        epicIdForIssueType(t.issueType, t.epicId),
         // Épico/História/Tarefa: estimativa é calculada pelas sub-tarefas (só Bug aceita valor próprio)
         hasManualEstimate(t.issueType) ? t.estimatedHours || 0 : 0,
         t.loggedHours || 0,
@@ -1226,7 +1226,15 @@ app.post('/api/tasks/:id/move', authenticateToken, validateBody(taskMoveSchema),
            sprint_id = NULL
        WHERE id = $7
        RETURNING *`,
-      [targetBoardId, newKey, targetStatusId, relations.epicId, relations.parentId, updatedAt, id]
+      [
+        targetBoardId,
+        newKey,
+        targetStatusId,
+        epicIdForIssueType(lockedTask.issueType, relations.epicId),
+        relations.parentId,
+        updatedAt,
+        id,
+      ]
     );
     await client.query('UPDATE task_attachments SET board_id = $1 WHERE task_id = $2', [targetBoardId, id]);
 
@@ -1342,7 +1350,7 @@ app.put('/api/tasks/:id', authenticateToken, validateBody(taskUpdateSchema), asy
         merged.statusId,
         merged.assigneeId,
         merged.reporterId,
-        merged.epicId || null,
+        epicIdForIssueType(merged.issueType, merged.epicId),
         hasManualEstimate(merged.issueType) ? merged.estimatedHours || 0 : 0,
         merged.loggedHours,
         merged.storyPoints,
@@ -2932,7 +2940,7 @@ app.post('/api/webhooks/incoming', async (req, res) => {
           statusId,
           assigneeIds[0] || '',
           '',
-          body.task?.epicId || null,
+          epicIdForIssueType(issueType, body.task?.epicId),
           hasManualEstimate(issueType) ? Number(body.task?.estimatedHours) || 0 : 0,
           0,
           Number(body.task?.storyPoints) || 0,

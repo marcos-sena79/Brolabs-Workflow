@@ -60,7 +60,9 @@ import {
   canSetTaskParent,
   getAllowedChildType,
   getAllowedParentType,
+  getParentTask,
 } from '../utils/taskHierarchy';
+import { ParentTaskLink } from './ParentTaskLink';
 
 export const TaskModal: React.FC = () => {
   const {
@@ -71,6 +73,7 @@ export const TaskModal: React.FC = () => {
     currentBoard,
     members,
     currentUser,
+    createTask,
     updateTask,
     moveTask,
     moveTaskToBoard,
@@ -101,6 +104,8 @@ export const TaskModal: React.FC = () => {
   // Local form states
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [newSubtaskHours, setNewSubtaskHours] = useState('1');
+  // Card filho criado de dentro do pai (História no Épico, Tarefa na História, Sub-bug no Bug)
+  const [newChildTitle, setNewChildTitle] = useState('');
   const [newCommentText, setNewCommentText] = useState('');
 
   // Subtask drag-and-drop hierarchy state
@@ -221,6 +226,7 @@ export const TaskModal: React.FC = () => {
   if (!task) return null;
 
   const allowedParentType = getAllowedParentType(task.issueType);
+  const parentTask = getParentTask(task, tasks);
   const parentCandidates = allowedParentType
     ? tasks.filter(
         (candidate) =>
@@ -239,6 +245,52 @@ export const TaskModal: React.FC = () => {
           canSetTaskParent(candidate, task, tasks)
       )
     : [];
+  // Criar filho já vinculado: só no quadro aberto, com permissão e se a hierarquia aceitar
+  // (ex.: um sub-bug não pode ter sub-bugs).
+  const canCreateChildCard = Boolean(
+    childCardType &&
+      task.boardId === currentBoard.id &&
+      can('canCreateTask', task.boardId) &&
+      canSetTaskParent(
+        { id: '__new_child__', boardId: task.boardId, issueType: childCardType, parentId: task.id },
+        task,
+        tasks
+      )
+  );
+  const childCardPlaceholder =
+    task.issueType === 'bug'
+      ? 'Novo sub-bug...'
+      : childCardType
+        ? `Nova ${getIssueTypeLabel(childCardType).toLowerCase()}...`
+        : '';
+
+  const handleAddChildCardSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const title = newChildTitle.trim();
+    if (!title || !childCardType || !canCreateChildCard) return;
+    // Mantém o "Épico / Módulo": História herda o próprio Épico (se estiver no catálogo);
+    // Tarefa e Sub-bug herdam o épico do pai.
+    const inheritedEpicId =
+      task.issueType === 'epic'
+        ? currentBoard.epics?.some((ep) => ep.id === task.id)
+          ? task.id
+          : undefined
+        : task.epicId || undefined;
+    createTask({
+      title,
+      description: '',
+      issueType: childCardType,
+      priority: task.priority,
+      statusId: getTodoColumnId(currentBoard),
+      assigneeIds: taskAssigneeIds(task),
+      epicId: inheritedEpicId,
+      parentId: task.id,
+      estimatedHours: 0,
+      storyPoints: 2,
+      dueDate: '',
+    });
+    setNewChildTitle('');
+  };
 
   const runAnalysis = async () => {
     setAiRunning(true);
@@ -541,13 +593,17 @@ export const TaskModal: React.FC = () => {
       <div className="bg-white dark:bg-slate-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-5xl max-h-[96dvh] sm:max-h-[92vh] flex flex-col overflow-hidden my-auto">
         {/* Top Header */}
         <div className="px-3 sm:px-6 py-3 sm:py-3.5 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 sm:gap-4 bg-slate-50/60 dark:bg-slate-900/80">
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 min-w-0">
             {/* Issue Type selector */}
             <div className="flex items-center gap-1.5 bg-white dark:bg-slate-800 px-2.5 py-1 rounded-md border border-slate-200 dark:border-slate-700">
               <IssueTypeIcon type={task.issueType} className="w-4 h-4" />
               <select
                 value={task.issueType}
-                onChange={(e) => updateTask(task.id, { issueType: e.target.value as IssueType })}
+                onChange={(e) => {
+                  const nextIssueType = e.target.value as IssueType;
+                  // Épico não se vincula a outro Épico: remove o vínculo que ficaria oculto
+                  updateTask(task.id, nextIssueType === 'epic' ? { issueType: nextIssueType, epicId: null } : { issueType: nextIssueType });
+                }}
                 className="text-xs font-semibold bg-transparent border-none text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
               >
                 <option value="story" disabled={!canChangeTaskIssueType(task, 'story', tasks)}>História</option>
@@ -566,6 +622,13 @@ export const TaskModal: React.FC = () => {
               <span>{task.key}</span>
               {copiedKey ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
+
+            {/* Card pai (Tarefa → História, História → Épico, Sub-bug → Bug) */}
+            {parentTask && (
+              <div className="flex min-w-0 max-w-[260px] sm:max-w-[340px]">
+                <ParentTaskLink parent={parentTask} onOpen={setSelectedTaskModalId} size="md" />
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -1107,6 +1170,27 @@ export const TaskModal: React.FC = () => {
                   <p className="text-center py-3 text-xs text-slate-400 dark:text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg">
                     Nenhum card filho cadastrado.
                   </p>
+                )}
+
+                {/* Criar card filho já vinculado a este card */}
+                {canCreateChildCard && (
+                  <form onSubmit={handleAddChildCardSubmit} className="flex gap-2 pt-1">
+                    <input
+                      type="text"
+                      placeholder={childCardPlaceholder}
+                      value={newChildTitle}
+                      onChange={(e) => setNewChildTitle(e.target.value)}
+                      className="flex-1 min-w-0 text-xs px-3 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                    <button
+                      type="submit"
+                      disabled={!newChildTitle.trim()}
+                      className="px-3 py-1.5 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 disabled:opacity-40 rounded-md shadow-2xs transition-colors shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5 inline mr-1" />
+                      Adicionar
+                    </button>
+                  </form>
                 )}
               </div>
             )}
@@ -1995,24 +2079,26 @@ export const TaskModal: React.FC = () => {
                 </select>
               </div>
 
-              {/* Epic */}
-              <div>
-                <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
-                  Épico / Módulo
-                </label>
-                <select
-                  value={task.epicId || ''}
-                  onChange={(e) => updateTask(task.id, { epicId: e.target.value || null })}
-                  className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
-                >
-                  <option value="">Sem Épico</option>
-                  {currentBoard.epics?.map((ep) => (
-                    <option key={ep.id} value={ep.id}>
-                      {ep.key}: {ep.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {/* Epic (um Épico não se vincula a outro Épico) */}
+              {task.issueType !== 'epic' && (
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                    Épico / Módulo
+                  </label>
+                  <select
+                    value={task.epicId || ''}
+                    onChange={(e) => updateTask(task.id, { epicId: e.target.value || null })}
+                    className="w-full text-xs px-2.5 py-1.5 rounded-md border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                  >
+                    <option value="">Sem Épico</option>
+                    {currentBoard.epics?.map((ep) => (
+                      <option key={ep.id} value={ep.id}>
+                        {ep.key}: {ep.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               {/* Sprint */}
               {(() => {

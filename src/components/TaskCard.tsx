@@ -17,8 +17,10 @@ import {
 import { Task } from '../types';
 import { useAgile } from '../context/AgileContext';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
+import { ParentTaskLink } from './ParentTaskLink';
 import { formatHours, formatDate, getRollupHours, isOverdue, isTaskDone } from '../utils/agileHelpers';
 import { taskAssigneeIds } from '../utils/taskAssignees';
+import { getParentTask } from '../utils/taskHierarchy';
 
 interface TaskCardProps {
   task: Task;
@@ -37,7 +39,11 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
     archiveTask,
     can,
     colorForTag,
+    setSelectedTaskModalId,
   } = useAgile();
+
+  // Card pai: Tarefa → História, História → Épico, Sub-bug → Bug
+  const parentTask = getParentTask(task, tasks);
 
   // Múltiplos responsáveis (Item 1): card mostra até 3 avatares + "+N" (D1: sem limite)
   const assignees = taskAssigneeIds(task)
@@ -180,6 +186,13 @@ export const TaskCard: React.FC<TaskCardProps> = ({ task, onOpenModal }) => {
           <PriorityIcon priority={task.priority} className="w-3.5 h-3.5" />
         </div>
       </div>
+
+      {/* Parent Card Link */}
+      {parentTask && (
+        <div className="mb-1.5 flex min-w-0">
+          <ParentTaskLink parent={parentTask} onOpen={setSelectedTaskModalId} />
+        </div>
+      )}
 
       {/* Epic Tag */}
       {epic && (

@@ -23,6 +23,8 @@ import {
   suggestNextSprintName,
 } from '../utils/sprints';
 import { IssueTypeIcon, PriorityIcon } from './AgileIcons';
+import { ParentTaskLink } from './ParentTaskLink';
+import { getParentTask } from '../utils/taskHierarchy';
 import { CompleteSprintModal, SprintFormModal, SprintFormValues } from './SprintModals';
 
 const BACKLOG_KEY = '__backlog__';
@@ -191,6 +193,7 @@ export const BacklogView: React.FC = () => {
       return target && !isTaskDone(currentBoard, target.statusId);
     });
     const blocksCount = (task.dependencies || []).filter((d) => d.type === 'blocks').length;
+    const parentTask = getParentTask(task, tasks);
 
     return (
       <div
@@ -202,6 +205,12 @@ export const BacklogView: React.FC = () => {
           <IssueTypeIcon type={task.issueType} className="w-4 h-4 shrink-0" />
           <span className="font-mono font-bold text-slate-500 text-[11px] shrink-0">{task.key}</span>
           <span className="font-semibold text-slate-900 dark:text-slate-100 truncate">{task.title}</span>
+
+          {parentTask && (
+            <div className="flex min-w-0 max-w-[45%]">
+              <ParentTaskLink parent={parentTask} onOpen={setSelectedTaskModalId} />
+            </div>
+          )}
 
           {isBlocked && (
             <span className="flex items-center gap-1 text-[10px] font-semibold text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/70 border border-rose-200 dark:border-rose-900 px-1.5 py-0.2 rounded shrink-0">

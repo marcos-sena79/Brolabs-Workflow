@@ -25,6 +25,7 @@ import {
   NoteAiAction,
   TagDef,
   Sprint,
+  IssueType,
 } from '../types';
 import { api } from '../services/api';
 import { normalizeAssigneeIds, taskHasAssignee } from '../utils/taskAssignees';
@@ -52,7 +53,8 @@ interface FilterState {
   searchQuery: string;
   selectedAssigneeId: string;
   selectedPriority: string;
-  selectedIssueType: string;
+  /** Tipos selecionados no filtro; lista vazia = todos os tipos. */
+  selectedIssueTypes: IssueType[];
   selectedEpicId: string;
   onlyMyTasks: boolean;
   onlyBlockedTasks?: boolean;
@@ -327,7 +329,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     searchQuery: '',
     selectedAssigneeId: 'all',
     selectedPriority: 'all',
-    selectedIssueType: 'all',
+    selectedIssueTypes: [],
     selectedEpicId: 'all',
     onlyMyTasks: false,
     onlyBlockedTasks: false,
@@ -750,7 +752,7 @@ export const AgileProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         return false;
       }
 
-      if (filters.selectedIssueType !== 'all' && task.issueType !== filters.selectedIssueType) {
+      if (filters.selectedIssueTypes.length > 0 && !filters.selectedIssueTypes.includes(task.issueType)) {
         return false;
       }
 

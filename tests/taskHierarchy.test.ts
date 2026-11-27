@@ -4,8 +4,10 @@ import path from 'node:path';
 import {
   canChangeTaskIssueType,
   canSetTaskParent,
+  epicIdForIssueType,
   getAllowedChildType,
   getAllowedParentType,
+  getParentTask,
 } from '../src/utils/taskHierarchy';
 import { IssueType } from '../src/types';
 
@@ -76,6 +78,42 @@ describe('card hierarchy rules', () => {
       subtasks: [{ id: 'sub-1', taskId: 'task-3', title: 'Sub', completed: false, estimatedHours: 1, loggedHours: 0 }],
     };
     expect(canChangeTaskIssueType(taskWithSubtasks, 'bug', [taskWithSubtasks])).toBe(false);
+  });
+
+  it('resolves the parent card shown on each card', () => {
+    const epic = node('epic', 'epic');
+    const story = node('story', 'story', 'epic');
+    const task = node('task', 'task', 'story');
+    const all = [epic, story, task];
+    expect(getParentTask(task, all)).toBe(story);
+    expect(getParentTask(story, all)).toBe(epic);
+    expect(getParentTask(epic, all)).toBeUndefined();
+    expect(getParentTask(node('orphan', 'task', 'missing'), all)).toBeUndefined();
+    expect(getParentTask(node('self', 'bug', 'self'), [node('self', 'bug', 'self')])).toBeUndefined();
+  });
+
+  it('never links an epic card to an epic', () => {
+    expect(epicIdForIssueType('epic', 'epic-1')).toBeNull();
+    expect(epicIdForIssueType('story', 'epic-1')).toBe('epic-1');
+    expect(epicIdForIssueType('task', '')).toBeNull();
+    expect(epicIdForIssueType('bug', undefined)).toBeNull();
+  });
+});
+
+describe('migration 0022_epic_without_epic_link', () => {
+  const migrationsDir = path.join(process.cwd(), 'migrations');
+  const up = fs.readFileSync(path.join(migrationsDir, '0022_epic_without_epic_link.up.sql'), 'utf8');
+  const down = fs.readFileSync(path.join(migrationsDir, '0022_epic_without_epic_link.down.sql'), 'utf8');
+
+  it('clears epic links only on epic cards, keeping a backup', () => {
+    expect(up).toMatch(/INSERT INTO epic_link_cleanup_backup/i);
+    expect(up).toMatch(/UPDATE tasks\s+SET epic_id = NULL\s+WHERE issue_type = 'epic'/i);
+    expect(up).not.toMatch(/DELETE FROM tasks/i);
+  });
+
+  it('restores the backed-up links on rollback', () => {
+    expect(down).toMatch(/SET epic_id = b\.epic_id/i);
+    expect(down).toMatch(/DROP TABLE IF EXISTS epic_link_cleanup_backup/i);
   });
 });
 

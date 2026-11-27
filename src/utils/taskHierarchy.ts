@@ -25,6 +25,19 @@ export const getAllowedParentType = (childType: IssueType): IssueType | null =>
 export const getAllowedChildType = (parentType: IssueType): IssueType | null =>
   childTypeByParent[parentType] || null;
 
+/** Épico não se vincula a outro Épico: o epicId só vale para os demais tipos. */
+export const epicIdForIssueType = (issueType: string, epicId?: string | null): string | null =>
+  issueType === 'epic' ? null : epicId || null;
+
+/** Card pai (via parentId) presente na lista; undefined se não houver vínculo ou o pai não estiver carregado. */
+export const getParentTask = <T extends Pick<TaskHierarchyNode, 'id'>>(
+  task: Pick<TaskHierarchyNode, 'id' | 'parentId'>,
+  tasks: T[]
+): T | undefined =>
+  task.parentId && task.parentId !== task.id
+    ? tasks.find((candidate) => candidate.id === task.parentId)
+    : undefined;
+
 export const isValidParentType = (childType: string, parentType: string): boolean =>
   (parentTypeByChild as Record<string, string | undefined>)[childType] === parentType;
 

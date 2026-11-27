@@ -192,6 +192,12 @@ export const CreateTaskModal: React.FC = () => {
                   setIssueType(nextIssueType);
                   setParentId('');
                   if (nextIssueType !== 'task') setQuickSubtasksInput('');
+                  // Épico não se vincula a outro Épico
+                  if (nextIssueType === 'epic') {
+                    setEpicId('');
+                    setShowNewEpic(false);
+                    setNewEpicName('');
+                  }
                 }}
                 className="w-full text-xs px-3 py-2 rounded-md border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
               >
@@ -250,7 +256,7 @@ export const CreateTaskModal: React.FC = () => {
           </div>
 
           {/* Assignees (Item 1 — múltiplos responsáveis), Priority & Epic */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className={`grid grid-cols-1 gap-3 ${issueType === 'epic' ? 'sm:grid-cols-2' : 'sm:grid-cols-3'}`}>
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Responsáveis
@@ -321,6 +327,7 @@ export const CreateTaskModal: React.FC = () => {
               </select>
             </div>
 
+            {issueType !== 'epic' && (
             <div>
               <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
                 Épico
@@ -350,10 +357,11 @@ export const CreateTaskModal: React.FC = () => {
                 <option value="__new__">+ Novo épico…</option>
               </select>
             </div>
+            )}
           </div>
 
           {/* Novo épico inline (catálogo do quadro) */}
-          {showNewEpic && (
+          {showNewEpic && issueType !== 'epic' && (
             <div className="p-3 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-900 space-y-2">
               <p className="text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
                 Novo épico no catálogo do quadro
